@@ -1,16 +1,19 @@
 name: Mobile Android APK
 
+# 不使用 Expo EAS 云端，不需要 EXPO_TOKEN。
+# Runner 上: expo prebuild → Gradle 打 APK → 上传到 Actions Artifacts。
+
 on:
   workflow_dispatch:
     inputs:
-      profile:
-        description: EAS build profile
+      variant:
+        description: APK variant
         required: true
-        default: preview
+        default: release
         type: choice
         options:
-          - preview
-          - production
+          - release
+          - debug
   push:
     tags:
       - 'v*'
@@ -35,16 +38,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve profile
-        id: profile
+      - name: Resolve variant
+        id: variant
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "name=${{ inputs.profile }}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "name=production" >> "$GITHUB_OUTPUT"
+            echo "name=${{ inputs.variant }}" >> "$GITHUB_OUTPUT"
           else
-            echo "name=preview" >> "$GITHUB_OUTPUT"
+            echo "name=release" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup Node
@@ -54,36 +55,98 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
 
-      # 全部装在 GitHub Runner 上，本机无需安装 eas-cli / node 依赖
-      - name: Install EAS CLI (on runner)
-        run: npm install -g eas-cli@latest
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
-      - name: Install app dependencies (on runner)
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install JS dependencies
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-      - name: Check Expo token
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          if [ -z "${EXPO_TOKEN}" ]; then
-            echo "在 GitHub → Settings → Secrets → Actions 添加 EXPO_TOKEN（expo.dev Access Token）"
-            exit 1
-          fi
-          eas whoami
+      - name: Prebuild native Android project
+        run: npx expo prebuild --platform android --non-interactive
 
-      - name: Verify EAS projectId
+      - name: Create CI signing keystore
+        if: steps.variant.outputs.name == 'release'
+        working-directory: mobile/android/app
+        run: |
+          keytool -genkeypair -v \
+            -storetype PKCS12 \
+            -keystore haoxiansuo-ci.keystore \
+            -alias haoxiansuo \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass haoxiansuo -keypass haoxiansuo \
+            -dname "CN=Haoxiansuo,OU=CI,O=YZZ,L=Wuhan,C=CN"
+
+      - name: Wire release signing
+        if: steps.variant.outputs.name == 'release'
+        working-directory: mobile/android/app
         shell: bash
         run: |
-          if ! grep -Eq '"projectId"[[:space:]]*:[[:space:]]*"[0-9a-fA-F-]{36}"' app.json; then
-            echo "mobile/app.json 缺少有效 extra.eas.projectId"
-            exit 1
+          python3 <<'PY'
+          from pathlib import Path
+          path = Path("build.gradle")
+          text = path.read_text(encoding="utf-8")
+          block = """
+              release {
+                  storeFile file('haoxiansuo-ci.keystore')
+                  storePassword 'haoxiansuo'
+                  keyAlias 'haoxiansuo'
+                  keyPassword 'haoxiansuo'
+              }
+          """
+          if "haoxiansuo-ci.keystore" not in text:
+              text = text.replace(
+                  "signingConfigs {",
+                  "signingConfigs {\n" + block,
+                  1,
+              )
+              # Prefer release keystore for release builds when template still points at debug.
+              text = text.replace(
+                  "signingConfig signingConfigs.debug",
+                  "signingConfig signingConfigs.release",
+              )
+              path.write_text(text, encoding="utf-8")
+          print("signing config ready")
+          PY
+
+      - name: Gradle assemble
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          if [ "${{ steps.variant.outputs.name }}" = "debug" ]; then
+            ./gradlew assembleDebug --no-daemon
+          else
+            ./gradlew assembleRelease --no-daemon
           fi
 
-      - name: EAS Build (Android APK)
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas build --platform android --profile ${{ steps.profile.outputs.name }} --non-interactive --wait
+      - name: Locate APK
+        id: apk
+        shell: bash
+        run: |
+          VARIANT="${{ steps.variant.outputs.name }}"
+          if [ "$VARIANT" = "debug" ]; then
+            APK=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          else
+            APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          fi
+          if [ -z "$APK" ]; then
+            echo "APK not found"
+            find android/app/build/outputs -type f -name "*.apk" || true
+            exit 1
+          fi
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          cp "$APK" "haoxiansuo-1.0.0-${VARIANT}.apk"
+          echo "Copied to haoxiansuo-1.0.0-${VARIANT}.apk"
 
-      - name: Print build result tip
-        run: echo "到 https://expo.dev 下载 APK"
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: haoxiansuo-apk-${{ steps.variant.outputs.name }}
+          path: mobile/haoxiansuo-1.0.0-${{ steps.variant.outputs.name }}.apk
+          if-no-files-found: error
