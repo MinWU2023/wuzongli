@@ -14,11 +14,15 @@ eas init
 # 确认 app.json → expo.extra.eas.projectId 已不是 REPLACE_WITH_EAS_PROJECT_ID
 ```
 
+若 CI 报 yarn / Setup Expo 失败：工作流已改为 `packager: npm`，重新推送即可。
+
 GitHub 仓库 → Settings → Secrets and variables → Actions 新增：
 
 | Name | Value |
 | --- | --- |
 | `EXPO_TOKEN` | https://expo.dev 账号 → Access tokens |
+
+没有 `EXPO_TOKEN` 或 `projectId` 仍是占位符时，Actions 会继续失败。
 
 先在 GitHub 建好空仓库（不要勾选自动加 README）。
 
