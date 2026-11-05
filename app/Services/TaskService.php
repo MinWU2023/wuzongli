@@ -1,0 +1,287 @@
+<?php
+declare(strict_types=1);
+
+namespace App\Services;
+
+use App\Core\Db;
+use App\Core\HttpException;
+use App\Core\Logger;
+use App\Core\Str;
+
+final class TaskService
+{
+    /**
+     * @param array<string, mixed> $input
+     * @return array<string, mixed>
+     */
+    public function create(array $input): array
+    {
+        $city = trim((string) ($input['city'] ?? ''));
+        if ($city === '') {
+            throw HttpException::validation('请输入目标城市，例如：武汉');
+        }
+        if (mb_strlen($city) > 100) {
+            throw HttpException::validation('城市名称过长');
+        }
+        $targetMarket = trim((string) ($input['target_market'] ?? '全球')) ?: '全球';
+        $keywordCount = (int) ($input['keyword_count'] ?? 0);
+        if ($keywordCount <= 0) {
+            $keywordCount = (int) setting('keyword_count', 24);
+        }
+        $keywordCount = max(6, min(60, $keywordCount));
+        $pagesTarget = (int) ($input['pages_target'] ?? 0);
+        if ($pagesTarget <= 0) {
+            $pagesTarget = (int) setting('serp_pages', 3);
+        }
+        $pagesTarget = max(1, min(10, $pagesTarget));
+        $language = preg_match('/^[a-z\-]{2,10}$/', (string) ($input['language'] ?? 'en')) ? (string) $input['language'] : 'en';
+
+        $options = [
+            'keyword_count' => $keywordCount,
+            'pages_target' => $pagesTarget,
+            'target_market' => Str::limit($targetMarket, 100, ''),
+        ];
+        $id = Db::instance()->insert('tasks', [
+            'city' => $city,
+            'country' => '中国',
+            'target_market' => Str::limit($targetMarket, 100, ''),
+            'language' => $language,
+            'stage' => 'keywords',
+            'status' => 'active',
+            'progress' => 0,
+            'options_json' => json_encode($options, JSON_UNESCAPED_UNICODE),
+            'started_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $this->log($id, 'keywords', 'info', '已创建城市任务：' . $city, $options);
+        return $this->find($id);
+    }
+
+    /**
+     * Light edit of task meta without wiping pipeline data.
+     * @param array<string, mixed> $input
+     * @return array<string, mixed>
+     */
+    public function update(int $id, array $input): array
+    {
+        $task = $this->find($id);
+        $city = array_key_exists('city', $input) ? trim((string) $input['city']) : (string) $task['city'];
+        if ($city === '') {
+            throw HttpException::validation('城市名称不能为空');
+        }
+        if (mb_strlen($city) > 100) {
+            throw HttpException::validation('城市名称过长');
+        }
+        $targetMarket = array_key_exists('target_market', $input)
+            ? (trim((string) $input['target_market']) ?: '全球')
+            : (string) ($task['target_market'] ?? '全球');
+
+        $options = is_array($task['options'] ?? null) ? $task['options'] : [];
+        $keywordCount = (int) ($input['keyword_count'] ?? $options['keyword_count'] ?? $task['keyword_count'] ?? 24);
+        $pagesTarget = (int) ($input['pages_target'] ?? $options['pages_target'] ?? $task['pages_target'] ?? 3);
+        $keywordCount = max(6, min(60, $keywordCount));
+        $pagesTarget = max(1, min(10, $pagesTarget));
+        $options['keyword_count'] = $keywordCount;
+        $options['pages_target'] = $pagesTarget;
+        $options['target_market'] = Str::limit($targetMarket, 100, '');
+
+        Db::instance()->update('tasks', [
+            'city' => $city,
+            'target_market' => Str::limit($targetMarket, 100, ''),
+            'options_json' => json_encode($options, JSON_UNESCAPED_UNICODE),
+            'updated_at' => now(),
+        ], ['id' => $id]);
+        $this->log($id, (string) $task['stage'], 'info', '已更新任务资料：' . $city, $options);
+        return $this->find($id);
+    }
+
+    /** @return array<string, mixed> */
+    public function find(int $id): array
+    {
+        $task = Db::instance()->table('tasks')->where('id', $id)->first();
+        if ($task === null) {
+            throw HttpException::notFound('任务不存在');
+        }
+        return $this->decorate($task);
+    }
+
+    /** @return array<string, mixed> */
+    public function decorate(array $task): array
+    {
+        $task['id'] = (int) $task['id'];
+        $task['progress'] = (int) $task['progress'];
+        $options = json_decode((string) ($task['options_json'] ?? '{}'), true);
+        $task['options'] = is_array($options) ? $options : [];
+        $task['keyword_count'] = (int) ($task['options']['keyword_count'] ?? setting('keyword_count', 24));
+        $task['pages_target'] = (int) ($task['options']['pages_target'] ?? setting('serp_pages', 3));
+        return $task;
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function recent(int $limit = 8): array
+    {
+        $rows = Db::instance()->table('tasks')->latest('id')->limit($limit)->get();
+        return array_map(fn (array $row): array => $this->decorate($row), $rows);
+    }
+
+    /** @return array<string, int> */
+    public function counts(int $taskId): array
+    {
+        $kw = Db::instance()->fetch(
+            'SELECT COUNT(*) AS total,
+                    COALESCE(SUM(CASE WHEN `status` = \'done\' THEN 1 ELSE 0 END), 0) AS done,
+                    COALESCE(SUM(`pages_target`), 0) AS pages_target,
+                    COALESCE(SUM(LEAST(`pages_done`, `pages_target`)), 0) AS pages_done,
+                    COALESCE(SUM(CASE WHEN `attempts` > 0 OR `error_pages` > 0 THEN 1 ELSE 0 END), 0) AS with_errors
+             FROM `' . Db::instance()->tableName('keywords') . '` WHERE `task_id` = ?',
+            [$taskId]
+        ) ?: [];
+
+        $web = Db::instance()->fetch(
+            'SELECT COUNT(*) AS total,
+                    COALESCE(SUM(CASE WHEN `classify_status` <> \'pending\' THEN 1 ELSE 0 END), 0) AS classified,
+                    COALESCE(SUM(CASE WHEN `classify_status` = \'approved\' THEN 1 ELSE 0 END), 0) AS approved,
+                    COALESCE(SUM(CASE WHEN `classify_status` = \'error\' THEN 1 ELSE 0 END), 0) AS classify_errors,
+                    COALESCE(SUM(CASE WHEN `classify_status` = \'approved\' AND `page_status` IN (\'done\', \'error\') THEN 1 ELSE 0 END), 0) AS pages_done,
+                    COALESCE(SUM(CASE WHEN `classify_status` = \'approved\' AND `page_status` = \'error\' THEN 1 ELSE 0 END), 0) AS page_errors,
+                    COALESCE(SUM(CASE WHEN `classify_status` = \'approved\' AND `page_status` = \'done\' THEN 1 ELSE 0 END), 0) AS extract_ready,
+                    COALESCE(SUM(CASE WHEN `classify_status` = \'approved\' AND `extract_status` IN (\'done\', \'error\') THEN 1 ELSE 0 END), 0) AS extracted,
+                    COALESCE(SUM(CASE WHEN `classify_status` = \'approved\' AND `extract_status` = \'error\' THEN 1 ELSE 0 END), 0) AS extract_errors
+             FROM `' . Db::instance()->tableName('websites') . '` WHERE `task_id` = ?',
+            [$taskId]
+        ) ?: [];
+
+        $companies = (int) (Db::instance()->value(
+            'SELECT COUNT(*) FROM `' . Db::instance()->tableName('companies') . '` WHERE `task_id` = ?',
+            [$taskId]
+        ) ?? 0);
+
+        $counts = [
+            'keywords_total' => (int) ($kw['total'] ?? 0),
+            'keywords_done' => (int) ($kw['done'] ?? 0),
+            'serp_pages_target' => (int) ($kw['pages_target'] ?? 0),
+            'serp_pages_done' => (int) ($kw['pages_done'] ?? 0),
+            'keyword_errors' => (int) ($kw['with_errors'] ?? 0),
+            'websites_total' => (int) ($web['total'] ?? 0),
+            'websites_classified' => (int) ($web['classified'] ?? 0),
+            'websites_approved' => (int) ($web['approved'] ?? 0),
+            'classify_errors' => (int) ($web['classify_errors'] ?? 0),
+            'pages_done' => (int) ($web['pages_done'] ?? 0),
+            'page_errors' => (int) ($web['page_errors'] ?? 0),
+            'extract_ready' => (int) ($web['extract_ready'] ?? 0),
+            'companies_extracted' => (int) ($web['extracted'] ?? 0),
+            'extract_errors' => (int) ($web['extract_errors'] ?? 0),
+            'companies' => $companies,
+        ];
+        $counts['pending_classify'] = max(0, $counts['websites_total'] - $counts['websites_classified']);
+        $counts['pending_crawl'] = max(0, $counts['websites_approved'] - $counts['pages_done']);
+        $counts['pending_extract'] = max(0, $counts['extract_ready'] - $counts['companies_extracted']);
+
+        return $counts;
+    }
+
+    /** @param array<string, int> $counts */
+    public function progress(array $task, array $counts): int
+    {
+        if ((string) $task['stage'] === 'done' || (string) $task['status'] === 'completed') {
+            return 100;
+        }
+        $stage = (string) $task['stage'];
+        $base = ['keywords' => 0, 'serp' => 10, 'classify' => 35, 'discover' => 55, 'extract' => 75][$stage] ?? 0;
+        $span = ['keywords' => 10, 'serp' => 25, 'classify' => 20, 'discover' => 20, 'extract' => 25][$stage] ?? 0;
+        $ratio = 0.0;
+        if ($stage === 'keywords') {
+            $ratio = $counts['keywords_total'] > 0 ? 0.7 : 0.0;
+        } elseif ($stage === 'serp') {
+            $ratio = $counts['serp_pages_target'] > 0 ? $counts['serp_pages_done'] / $counts['serp_pages_target'] : 0.0;
+        } elseif ($stage === 'classify') {
+            $ratio = $counts['websites_total'] > 0 ? $counts['websites_classified'] / $counts['websites_total'] : 0.0;
+        } elseif ($stage === 'discover') {
+            $ratio = $counts['websites_approved'] > 0 ? $counts['pages_done'] / $counts['websites_approved'] : 0.0;
+        } elseif ($stage === 'extract') {
+            $ratio = $counts['extract_ready'] > 0 ? $counts['companies_extracted'] / $counts['extract_ready'] : 0.0;
+        }
+        $ratio = max(0.0, min(1.0, $ratio));
+        return (int) max(0, min(99, round($base + $span * $ratio)));
+    }
+
+    /** @param array<string, int> $counts */
+    public function refresh(array $task, array $counts): int
+    {
+        $progress = $this->progress($task, $counts);
+        if ($progress !== (int) $task['progress']) {
+            Db::instance()->update('tasks', ['progress' => $progress], ['id' => (int) $task['id']]);
+            $task['progress'] = $progress;
+        }
+        return $progress;
+    }
+
+    public function setStage(int $id, string $stage, string $message = ''): void
+    {
+        $data = ['stage' => $stage];
+        if ($stage === 'done') {
+            $data['status'] = 'completed';
+            $data['progress'] = 100;
+            $data['finished_at'] = now();
+        } else {
+            $data['finished_at'] = null;
+        }
+        Db::instance()->update('tasks', $data + ['updated_at' => now()], ['id' => $id]);
+        if ($message !== '') {
+            $this->log($id, $stage, 'info', $message);
+        }
+    }
+
+    public function setStatus(int $id, string $status, string $stage = 'system', string $message = ''): void
+    {
+        Db::instance()->update('tasks', [
+            'status' => $status,
+            'updated_at' => now(),
+        ], ['id' => $id]);
+        if ($message !== '') {
+            $this->log($id, $stage, $status === 'failed' ? 'error' : 'info', $message);
+        }
+    }
+
+    public function setError(int $id, ?string $message): void
+    {
+        Db::instance()->update('tasks', [
+            'error_message' => $message === null ? null : Str::limit($message, 950, ''),
+            'updated_at' => now(),
+        ], ['id' => $id]);
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     */
+    public function log(int $taskId, string $stage, string $level, string $message, array $context = []): void
+    {
+        try {
+            Db::instance()->insert('task_logs', [
+                'task_id' => $taskId,
+                'stage' => Str::limit($stage, 20, ''),
+                'level' => in_array($level, ['info', 'success', 'warning', 'error'], true) ? $level : 'info',
+                'message' => Str::limit($message, 950, ''),
+                'context_json' => $context === [] ? null : json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'created_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            Logger::error('Unable to write task log', ['task_id' => $taskId, 'error' => $e->getMessage()]);
+        }
+        Logger::log($level === 'error' ? 'error' : 'info', '[task ' . $taskId . '] ' . $message, $context);
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    public function logs(int $taskId, int $limit = 80): array
+    {
+        $rows = Db::instance()->table('task_logs')->where('task_id', $taskId)->latest('id')->limit($limit)->get();
+        return array_map(static function (array $row): array {
+            $row['id'] = (int) $row['id'];
+            $row['task_id'] = (int) $row['task_id'];
+            $context = json_decode((string) ($row['context_json'] ?? 'null'), true);
+            $row['context'] = is_array($context) ? $context : [];
+            return $row;
+        }, $rows);
+    }
+}

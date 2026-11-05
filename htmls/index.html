@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>好线索 · 页面预览</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="icon" href="../mobile/assets/favicon.png">
+</head>
+<body>
+  <div class="preview-meta">
+    <div>
+      <h1>好线索</h1>
+      <p>Mobile App HTML 预览 · 接单 / 任务 / 企业 / 设置</p>
+    </div>
+    <div class="links">
+      <a href="index.html?tab=dial">接单</a>
+      <a href="index.html?tab=tasks">任务</a>
+      <a href="index.html?tab=companies">企业</a>
+      <a href="index.html?tab=settings">设置</a>
+    </div>
+  </div>
+
+  <div class="phone" id="app">
+    <div class="notch">好线索</div>
+
+    <!-- 接单 -->
+    <section class="screen active" data-screen="dial" id="screen-dial">
+      <div class="header">
+        <h2 class="title">好线索</h2>
+        <p class="subtitle">插件点击「拨号」后号码入库；开启接单后本机每 10 秒领取并唤起电话。</p>
+      </div>
+
+      <div class="card">
+        <div class="accept-row">
+          <div style="flex:1">
+            <div class="accept-title" id="acceptTitle">未接单</div>
+            <p class="muted" id="acceptHint">打开开关开始自动领取</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="acceptSwitch">
+            <span></span>
+          </label>
+        </div>
+        <div class="stats-row">
+          <div class="stat-pill"><div class="stat-num" id="pendingCount">3</div><div class="stat-label">待拨</div></div>
+          <div class="stat-pill"><div class="stat-num" id="currentCount">0</div><div class="stat-label">当前</div></div>
+          <span class="badge muted" id="statusBadge">接单已关闭</span>
+        </div>
+      </div>
+
+      <div class="card" id="emptyCard">
+        <h3 class="empty-title">队列空闲</h3>
+        <p class="subtitle">在 Chrome 插件企业列表点击「拨号」，号码会进入队列。手机开启接单后自动弹出拨号盘。</p>
+        <div class="actions">
+          <button class="btn primary" type="button" id="checkQueueBtn">立即检查队列</button>
+        </div>
+      </div>
+
+      <div class="card" id="jobCard" hidden>
+        <span class="badge">当前号码</span>
+        <div class="phone-big" id="jobPhone">+86 138 0000 8888</div>
+        <p class="company-name" id="jobCompany">武汉汉星激光设备有限公司</p>
+        <p class="muted" id="jobMeta">武汉 · hanstarmachine.com · vivian@hanstarmachine.com</p>
+        <p class="muted" id="jobAddress">华工科技产业园，东湖高新区，武汉</p>
+        <div class="actions">
+          <button class="btn primary" type="button" id="redialBtn">再次拨号</button>
+          <button class="btn primary" type="button" id="doneBtn">已接通 / 完成</button>
+          <button class="btn ghost" type="button" id="failBtn">未接通 / 失败</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 任务 -->
+    <section class="screen" data-screen="tasks" id="screen-tasks">
+      <div class="header">
+        <h2 class="title">任务管理</h2>
+        <p class="muted">创建 / 编辑 / 终止 / 回退；开关控制插件是否排队执行</p>
+      </div>
+      <div class="card">
+        <div class="accept-row">
+          <div style="flex:1">
+            <div class="accept-title" id="runnerTitle">插件自动跑：开</div>
+            <p class="muted" id="runnerHint">扩展会排队执行 active 任务</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="runnerSwitch" checked>
+            <span></span>
+          </label>
+        </div>
+      </div>
+      <div class="filter-bar">
+        <span class="muted">预览示例任务</span>
+        <button class="btn primary" type="button" id="previewCreateTask">新建</button>
+      </div>
+      <div id="taskList"></div>
+    </section>
+
+    <!-- 企业 -->
+    <section class="screen" data-screen="companies" id="screen-companies">
+      <div class="header">
+        <h2 class="title">企业线索</h2>
+        <p class="muted">共 <span id="companyTotal">3</span> 条 · 可按城市 / 公司 / 手机号筛选</p>
+      </div>
+
+      <div class="field">
+        <label>快速搜索</label>
+        <input id="quickSearch" type="search" placeholder="公司、城市、电话…">
+      </div>
+
+      <div class="filter-bar">
+        <button class="filter-toggle" type="button" id="filterToggle">高级筛选</button>
+        <button class="btn primary" type="button" id="searchBtn">搜索</button>
+      </div>
+
+      <div class="card advanced" id="advancedFilters">
+        <div class="field"><label>城市</label><input id="filterCity" placeholder="例如：武汉"></div>
+        <div class="field"><label>公司名</label><input id="filterCompany" placeholder="公司或域名"></div>
+        <div class="field"><label>手机号</label><input id="filterPhone" placeholder="号码片段" inputmode="tel"></div>
+      </div>
+
+      <div id="companyList"></div>
+    </section>
+
+    <!-- 设置 -->
+    <section class="screen" data-screen="settings" id="screen-settings">
+      <div class="header">
+        <h2 class="title">好线索 · 设置</h2>
+        <p class="subtitle">默认对接 https://google.yzz.me，使用后台「系统设置」中的 API Key。</p>
+      </div>
+
+      <div class="card">
+        <div class="field">
+          <label>API 地址</label>
+          <input id="apiBase" value="https://google.yzz.me" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <input id="apiKey" type="password" placeholder="gle_…" autocomplete="off" spellcheck="false">
+        </div>
+        <p class="muted">设备 ID：m-preview8k2a</p>
+      </div>
+
+      <div class="card">
+        <h3 class="help-title">AI 中转站</h3>
+        <p class="muted" id="aiStatus">用于关键词 / 筛选 / 提取等 AI 步骤</p>
+        <div class="field">
+          <label>AI URL</label>
+          <input id="aiBaseUrl" value="https://api.openai.com/v1" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label>AI 密钥</label>
+          <input id="aiApiKey" type="password" placeholder="留空保持服务器现有密钥不变" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label>模型</label>
+          <input id="aiModel" value="gpt-4o-mini" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="actions">
+          <button class="btn primary" type="button" id="saveBtn">保存配置</button>
+          <button class="btn ghost" type="button" id="testBtn">测试连接</button>
+        </div>
+        <div class="probe" id="probeText" hidden></div>
+      </div>
+
+      <div class="card">
+        <h3 class="help-title">使用说明</h3>
+        <ul class="help-list">
+          <li>1. 先填 API 地址与 Key，再配置 AI URL / 密钥。</li>
+          <li>2. 保存后写入服务器 AI 中转站，插件与流水线共用。</li>
+          <li>3. 「任务」页可创建/终止/回退，并用开关控制插件自动跑。</li>
+          <li>4. 开启接单后，拨号队列号码会唤起系统电话。</li>
+        </ul>
+      </div>
+    </section>
+
+    <nav class="tabbar tabs-4">
+      <button type="button" class="active" data-tab="dial"><span class="glyph">☎</span>接单</button>
+      <button type="button" data-tab="tasks"><span class="glyph">任</span>任务</button>
+      <button type="button" data-tab="companies"><span class="glyph">企</span>企业</button>
+      <button type="button" data-tab="settings"><span class="glyph">设</span>设置</button>
+    </nav>
+  </div>
+
+  <script src="js/preview.js"></script>
+</body>
+</html>

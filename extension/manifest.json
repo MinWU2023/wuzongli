@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "外贸客 · Google 线索引擎",
+  "short_name": "外贸客",
+  "version": "1.0.0",
+  "description": "输入城市，自动完成 Google 拓域、AI 企业筛选、官网页面识别与联系方式提取。",
+  "action": {
+    "default_title": "打开外贸客",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://google.serper.dev/*",
+    "https://*.google.com/*",
+    "https://*.google.com.hk/*",
+    "https://*.google.co.uk/*",
+    "https://*.google.co.jp/*",
+    "https://*.google.com.au/*",
+    "http://*/*",
+    "https://*/*"
+  ]
+}

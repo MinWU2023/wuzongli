@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>外贸客 · Google 线索引擎</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+    <header class="topbar">
+        <button class="brand" id="brandHome" type="button" title="回到任务总览">
+            <span class="brand-mark"><span>G</span></span>
+            <span class="brand-copy"><b>外贸客</b><small>GOOGLE LEAD ENGINE</small></span>
+        </button>
+        <div class="topbar-center">
+            <button class="connection-pill" id="connectionPill" type="button" title="检查服务器连接">
+                <i id="connectionDot"></i><span id="connectionLabel">未连接</span>
+            </button>
+            <span class="topbar-divider"></span>
+            <span class="version-label">REST v1</span>
+        </div>
+        <div class="topbar-actions">
+            <button class="icon-btn" id="refreshBtn" type="button" title="刷新任务">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-2.3 6.7M20 4v7h-7"/></svg>
+            </button>
+            <button class="btn ghost dark" id="settingsBtn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21h-4v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.51-1H3v-4h.09a1.7 1.7 0 0 0 1.51-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8.9 4.6a1.7 1.7 0 0 0 1-1.51V3h4v.09a1.7 1.7 0 0 0 1 1.51 1.7 1.7 0 0 0 1.87-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 8.9a1.7 1.7 0 0 0 1.51 1H21v4h-.09a1.7 1.7 0 0 0-1.51 1Z"/></svg>
+                设置
+            </button>
+            <button class="btn primary" id="newTaskBtn" type="button">
+                <span class="plus">+</span> 新建城市任务
+            </button>
+        </div>
+    </header>
+
+    <div class="app-body">
+        <aside class="task-rail">
+            <div class="rail-heading">
+                <div><span class="eyebrow">CITY MISSIONS</span><h2>城市任务</h2></div>
+                <span class="rail-count" id="taskCount">0</span>
+            </div>
+            <div class="rail-search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                <input id="taskSearch" type="search" placeholder="搜索城市…" autocomplete="off">
+                <kbd>⌘K</kbd>
+            </div>
+            <div class="task-list" id="taskList"></div>
+            <div class="rail-footer">
+                <span class="rail-heartbeat"><i></i> 自动轮询</span>
+                <span class="rail-hint">关闭窗口任务不会丢失</span>
+            </div>
+        </aside>
+
+        <main class="workspace" id="workspace">
+            <section class="workspace-empty" id="workspaceEmpty">
+                <div class="empty-orbit">
+                    <span class="orbit orbit-one"></span>
+                    <span class="orbit orbit-two"></span>
+                    <span class="empty-core">G</span>
+                    <span class="empty-satellite sat-a"></span>
+                    <span class="empty-satellite sat-b"></span>
+                </div>
+                <span class="eyebrow accent">CITY → GOOGLE → AI → CONTACTS</span>
+                <h1>从一个城市开始。</h1>
+                <p>插件使用你的浏览器完成 Google 搜索和官网抓取，服务器负责 AI 判断与线索沉淀。所有步骤依次推进，直到拿到电话与社媒。</p>
+                <div class="empty-actions">
+                    <button class="btn primary large" id="emptyNewBtn" type="button">+ 添加城市</button>
+                    <button class="btn ghost large" id="emptySettingsBtn" type="button">连接服务器</button>
+                </div>
+                <div class="empty-steps">
+                    <div><span>01</span><b>配置接口</b><small>填写服务器地址和 API Key</small></div>
+                    <div><span>02</span><b>添加城市</b><small>AI 生成外贸搜索词</small></div>
+                    <div><span>03</span><b>自动采集</b><small>搜索 · 筛选 · 抓取 · 提取</small></div>
+                </div>
+            </section>
+
+            <section class="task-workspace" id="taskWorkspace" hidden>
+                <div class="task-header">
+                    <div class="task-head-main">
+                        <div class="task-kicker">
+                            <span class="status-badge" id="taskStatusBadge">运行中</span>
+                            <span class="task-number" id="taskId">#1</span>
+                            <span class="task-created" id="taskCreated"></span>
+                        </div>
+                        <h1><span id="taskCity">武汉</span><small>外贸独立站线索任务</small></h1>
+                        <p id="taskMeta">目标市场：全球 · 24 个关键词 · 3 页 Google</p>
+                    </div>
+                    <div class="task-head-actions">
+                        <button class="btn primary" id="startBtn" type="button">
+                            <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                            <span id="startBtnLabel">开始采集</span>
+                        </button>
+                        <button class="btn ghost" id="pauseBtn" type="button" hidden>
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+                            暂停
+                        </button>
+                        <button class="btn ghost icon-only" id="retryBtn" type="button" title="重试异常" hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-2.3 6.7M20 4v7h-7"/></svg>
+                        </button>
+                        <button class="btn ghost" id="rewindBtn" type="button" title="编辑任务参数或回退到指定步骤重新开始">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+                            回退 / 编辑
+                        </button>
+                    </div>
+                </div>
+
+                <section class="progress-panel">
+                    <div class="progress-head">
+                        <div class="progress-title">
+                            <span class="eyebrow">PIPELINE PROGRESS</span>
+                            <b id="progressPercent">0%</b>
+                        </div>
+                        <span class="progress-hint" id="progressHint">等待启动</span>
+                    </div>
+                    <div class="progress-track"><i id="progressFill"></i></div>
+                    <div class="stepper" id="stepper"></div>
+                </section>
+
+                <section class="stat-row">
+                    <article class="mini-stat tone-blue">
+                        <div class="mini-stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h10M4 17h7"/></svg></div>
+                        <div><span>关键词</span><b id="statKeywords">0</b><small id="statKeywordsSub">尚未生成</small></div>
+                    </article>
+                    <article class="mini-stat tone-violet">
+                        <div class="mini-stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg></div>
+                        <div><span>去重域名</span><b id="statDomains">0</b><small id="statDomainsSub">来自 Google 结果</small></div>
+                    </article>
+                    <article class="mini-stat tone-green">
+                        <div class="mini-stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 13 4 4L19 7"/></svg></div>
+                        <div><span>AI 通过</span><b id="statApproved">0</b><small id="statApprovedSub">企业独立站</small></div>
+                    </article>
+                    <article class="mini-stat tone-amber">
+                        <div class="mini-stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6"/></svg></div>
+                        <div><span>企业线索</span><b id="statCompanies">0</b><small id="statCompaniesSub">含电话 / 社媒</small></div>
+                    </article>
+                </section>
+
+                <section class="action-banner" id="actionBanner">
+                    <div class="action-pulse"><span></span></div>
+                    <div class="action-copy">
+                        <span class="eyebrow">CURRENT STEP</span>
+                        <b id="actionTitle">等待插件轮询</b>
+                        <p id="actionMessage">正在读取服务器任务状态…</p>
+                    </div>
+                    <div class="action-meta" id="actionMeta"></div>
+                    <button class="btn ghost small" id="runOneBtn" type="button" hidden>执行一步</button>
+                </section>
+
+                <section class="data-panel">
+                    <div class="panel-tabs">
+                        <button class="tab-btn active" data-tab="overview" type="button">概览</button>
+                        <button class="tab-btn" data-tab="keywords" type="button">关键词 <span id="tabKeywordsCount">0</span></button>
+                        <button class="tab-btn" data-tab="domains" type="button">域名 <span id="tabDomainsCount">0</span></button>
+                        <button class="tab-btn" data-tab="companies" type="button">企业 <span id="tabCompaniesCount">0</span></button>
+                        <button class="tab-btn" data-tab="logs" type="button">日志</button>
+                        <div class="tab-spacer"></div>
+                        <button class="text-btn" id="exportBtn" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/></svg>
+                            导出 CSV
+                        </button>
+                    </div>
+
+                    <div class="tab-panel overview-grid" id="overviewPanel">
+                        <div class="overview-left">
+                            <article class="info-card current-card">
+                                <div class="card-heading"><span class="eyebrow">NOW RUNNING</span><span class="live-chip"><i></i> LIVE</span></div>
+                                <div class="current-action">
+                                    <span class="action-icon" id="currentActionIcon">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v4m0 10v4M5 12H3m18 0h-2"/><circle cx="12" cy="12" r="4"/></svg>
+                                    </span>
+                                    <div><h3 id="currentActionTitle">读取任务状态</h3><p id="currentActionText">等待服务器下发下一步动作。</p></div>
+                                </div>
+                                <div class="action-counts" id="actionCounts"></div>
+                            </article>
+                            <article class="info-card">
+                                <div class="card-heading"><span class="eyebrow">MISSION BRIEF</span></div>
+                                <div class="mission-grid">
+                                    <div><span>城市</span><b id="missionCity">—</b></div>
+                                    <div><span>目标市场</span><b id="missionMarket">—</b></div>
+                                    <div><span>关键词</span><b id="missionKeywords">—</b></div>
+                                    <div><span>Google 页数</span><b id="missionPages">—</b></div>
+                                    <div><span>创建时间</span><b id="missionCreated">—</b></div>
+                                    <div><span>任务状态</span><b id="missionStatus">—</b></div>
+                                </div>
+                            </article>
+                        </div>
+                        <article class="info-card live-console">
+                            <div class="card-heading"><span class="eyebrow">LOCAL CONSOLE</span><button class="text-btn" id="clearLocalBtn" type="button">清空</button></div>
+                            <div class="console-lines" id="localConsole"></div>
+                        </article>
+                    </div>
+
+                    <div class="tab-panel" id="keywordsPanel" hidden>
+                        <div class="table-scroll">
+                            <table class="data-table">
+                                <thead><tr><th>搜索词</th><th>意图</th><th>进度</th><th>结果数</th><th>状态</th></tr></thead>
+                                <tbody id="keywordsTableBody"></tbody>
+                            </table>
+                            <div class="table-empty" id="keywordsEmpty" hidden>还没有生成关键词。启动任务后 AI 会按城市生成外贸独立站搜索词。</div>
+                        </div>
+                    </div>
+
+                    <div class="tab-panel" id="domainsPanel" hidden>
+                        <div class="filter-row">
+                            <div class="filter-chips" id="domainFilters">
+                                <button class="chip active" data-domain-filter="all" type="button">全部</button>
+                                <button class="chip" data-domain-filter="approved" type="button">AI 通过</button>
+                                <button class="chip" data-domain-filter="pending" type="button">待筛选</button>
+                                <button class="chip" data-domain-filter="rejected" type="button">已排除</button>
+                            </div>
+                            <span class="filter-note" id="domainFilterNote"></span>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="data-table domains-table">
+                                <thead><tr><th>域名</th><th>AI 判断</th><th>官网页面</th><th>提取</th><th>依据</th></tr></thead>
+                                <tbody id="domainsTableBody"></tbody>
+                            </table>
+                            <div class="table-empty" id="domainsEmpty" hidden>还没有域名。Google 搜索结果会在去重后写入这里。</div>
+                        </div>
+                    </div>
+
+                    <div class="tab-panel" id="companiesPanel" hidden>
+                        <div class="company-toolbar">
+                            <span class="eyebrow">CONTACT LEADS</span>
+                            <span id="companyCountLabel">0 家企业</span>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="data-table companies-table">
+                                <thead><tr><th>企业</th><th>电话</th><th>邮箱</th><th>LinkedIn</th><th>TikTok</th><th>YouTube</th><th>来源</th></tr></thead>
+                                <tbody id="companiesTableBody"></tbody>
+                            </table>
+                            <div class="table-empty" id="companiesEmpty" hidden>还没有企业线索。通过 AI 筛选的官网会依次抓取首页、关于和联系页面。</div>
+                        </div>
+                    </div>
+
+                    <div class="tab-panel" id="logsPanel" hidden>
+                        <div class="server-log" id="serverLogs"></div>
+                        <div class="table-empty" id="logsEmpty" hidden>暂无服务器日志。</div>
+                    </div>
+                </section>
+            </section>
+        </main>
+    </div>
+</div>
+
+<!-- Settings modal -->
+<div class="modal-backdrop" id="settingsModal" hidden>
+    <div class="modal">
+        <div class="modal-head">
+            <div><span class="eyebrow accent">CONNECTION</span><h2>连接服务器</h2><p>填写 PHP 服务端根地址与后台生成的 API Key。</p></div>
+            <button class="icon-btn" id="settingsClose" type="button" aria-label="关闭">✕</button>
+        </div>
+        <form id="settingsForm" class="modal-body">
+            <label class="field"><span>API 地址</span>
+                <input id="apiBaseInput" type="url" placeholder="https://your-site.example.com" autocomplete="off" spellcheck="false">
+                <small>不要包含 /api；如果使用子目录请带上子目录。</small>
+            </label>
+            <label class="field"><span>API Key</span>
+                <div class="secret-input">
+                    <input id="apiKeyInput" type="password" placeholder="从后台「系统设置」复制" autocomplete="off" spellcheck="false">
+                    <button class="text-btn" id="toggleApiKey" type="button">显示</button>
+                </div>
+            </label>
+            <div class="field-row">
+                <label class="field"><span>Google 搜索方式</span>
+                    <select id="searchProviderInput">
+                        <option value="serper">Serper.dev API（免验证 · 推荐）</option>
+                        <option value="server">由 PHP 服务端调用 Serper</option>
+                        <option value="browser">浏览器直接抓取 Google</option>
+                    </select>
+                </label>
+                <label class="field compact"><span>请求间隔（毫秒）</span><input id="delayInput" type="number" min="300" max="15000" step="100" value="2500"></label>
+            </div>
+            <label class="field" id="serperKeyField"><span>Serper.dev API Key <em id="serperKeyStatus" style="font-style:normal;color:#7f98cb;font-weight:500;">实时生效</em></span>
+                <div class="secret-input">
+                    <input id="serperKeyInput" type="password" value="a4be645a029169206f66e8024a73361f005fc5ef" placeholder="填写或更换 serper.dev API Key" autocomplete="off" spellcheck="false">
+                    <button class="text-btn" id="toggleSerperKey" type="button">显示</button>
+                    <button class="text-btn" id="testSerperBtn" type="button" style="margin-left:6px;padding-left:8px;border-left:1px solid rgba(151,173,219,.2);">验证 Key</button>
+                </div>
+                <small>支持随时更换 Serper Key：修改后自动实时保存并同步至服务端，下一次搜索请求立即使用新 Key。</small>
+            </label>
+            <div class="field-row">
+                <label class="field"><span>AI 中转站 URL <em id="aiRelayStatus" style="font-style:normal;color:#7f98cb;font-weight:500;">自动同步</em></span>
+                    <input id="aiBaseUrlInput" type="url" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false">
+                </label>
+                <label class="field"><span>AI 模型名称</span>
+                    <input id="aiModelInput" type="text" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false">
+                </label>
+            </div>
+            <label class="field"><span>AI 中转站 API Key</span>
+                <div class="secret-input">
+                    <input id="aiApiKeyInput" type="password" placeholder="填写或更换 AI 中转站 Key（sk-...）" autocomplete="off" spellcheck="false">
+                    <button class="text-btn" id="toggleAiKey" type="button">显示</button>
+                </div>
+                <small>填写后将加密同步到服务端 AI 中转站配置，后续关键词生成、企业筛选、联系方式提取立即生效。</small>
+            </label>
+            <div class="modal-switches">
+                <label class="switch-line">
+                    <input id="autoRunInput" type="checkbox">
+                    <span class="switch"></span>
+                    <span><b>自动推进任务</b><small>空闲时每 3 秒向服务器领取下一步</small></span>
+                </label>
+            </div>
+            <div class="connection-result" id="connectionResult" hidden></div>
+        </form>
+        <div class="modal-foot">
+            <button class="btn ghost" id="testConnectionBtn" type="button">测试连接</button>
+            <div class="foot-right">
+                <button class="btn ghost" id="settingsCancel" type="button">取消</button>
+                <button class="btn primary" id="settingsSaveBtn" type="button">保存并刷新</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- New task modal -->
+<div class="modal-backdrop" id="newTaskModal" hidden>
+    <div class="modal">
+        <div class="modal-head">
+            <div><span class="eyebrow accent">NEW CITY</span><h2>新建城市任务</h2><p>输入城市后，AI 会生成面向海外买家的外贸搜索词。</p></div>
+            <button class="icon-btn" id="newTaskClose" type="button" aria-label="关闭">✕</button>
+        </div>
+        <form id="newTaskForm" class="modal-body">
+            <label class="field"><span>城市</span>
+                <input id="cityInput" type="text" placeholder="例如：武汉" maxlength="40" required>
+                <small>建议使用中文城市名，AI 会自动补全拼音与产业带信息。</small>
+            </label>
+            <div class="field-row">
+                <label class="field"><span>目标市场</span>
+                    <select id="marketInput">
+                        <option value="全球">全球</option>
+                        <option value="北美">北美</option>
+                        <option value="欧洲">欧洲</option>
+                        <option value="中东">中东</option>
+                        <option value="东南亚">东南亚</option>
+                        <option value="拉美">拉美</option>
+                        <option value="非洲">非洲</option>
+                    </select>
+                </label>
+                <label class="field"><span>关键词数量</span>
+                    <input id="keywordCountInput" type="number" min="6" max="60" value="24">
+                </label>
+            </div>
+            <div class="field-row">
+                <label class="field"><span>每个关键词 Google 页数</span>
+                    <input id="pagesTargetInput" type="number" min="1" max="10" value="3">
+                </label>
+                <div class="field presets">
+                    <span>快捷设置</span>
+                    <div class="preset-buttons">
+                        <button type="button" data-preset="quick">轻量</button>
+                        <button type="button" data-preset="standard" class="active">标准</button>
+                        <button type="button" data-preset="deep">深度</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-notice">
+                <span>AI 正在使用的提示词</span>
+                <p>关键词生成 · 域名筛选 · 页面识别 · 联系方式提取，全部由服务器提示词模板控制。</p>
+            </div>
+        </form>
+        <div class="modal-foot">
+            <span class="foot-note">任务创建后立即开始，可在后台随时暂停。</span>
+            <div class="foot-right">
+                <button class="btn ghost" id="newTaskCancel" type="button">取消</button>
+                <button class="btn primary" id="newTaskSubmit" type="button">创建并开始</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit / Rewind task modal -->
+<div class="modal-backdrop" id="rewindModal" hidden>
+    <div class="modal">
+        <div class="modal-head">
+            <div><span class="eyebrow accent">REWIND &amp; EDIT</span><h2>编辑任务 &amp; 回退步骤</h2><p>选择要回退到的流水线阶段，清理后续步骤数据并重新开始执行。</p></div>
+            <button class="icon-btn" id="rewindClose" type="button" aria-label="关闭">✕</button>
+        </div>
+        <form id="rewindForm" class="modal-body">
+            <label class="field"><span>回退到哪一步重新开始</span>
+                <select id="rewindStageSelect">
+                    <option value="keywords">01 · AI 关键词（清空全部关键词、域名与企业，从头重新生成）</option>
+                    <option value="serp">02 · Google 搜索（保留现有关键词，重新搜索抓取域名）</option>
+                    <option value="classify">03 · AI 企业筛选（保留已抓取域名，重新调用 AI 筛选企业官网）</option>
+                    <option value="discover">04 · 官网页面（保留已通过企业域名，重新抓取识别官网关键页）</option>
+                    <option value="extract">05 · 联系方式（保留已识别的官网页面，重新提取企业名录与联系方式）</option>
+                </select>
+                <small id="rewindStageHint">将清理所选阶段及之后的数据，自动重算进度并立即从该阶段重新运行。</small>
+            </label>
+            <div class="field-row">
+                <label class="field"><span>城市名称</span>
+                    <input id="editCityInput" type="text" maxlength="40" required>
+                </label>
+                <label class="field"><span>目标市场</span>
+                    <select id="editMarketInput">
+                        <option value="全球">全球</option>
+                        <option value="北美">北美</option>
+                        <option value="欧洲">欧洲</option>
+                        <option value="中东">中东</option>
+                        <option value="东南亚">东南亚</option>
+                        <option value="拉美">拉美</option>
+                        <option value="非洲">非洲</option>
+                    </select>
+                </label>
+            </div>
+            <div class="field-row">
+                <label class="field"><span>关键词数量</span>
+                    <input id="editKeywordCountInput" type="number" min="6" max="60" value="24">
+                </label>
+                <label class="field"><span>每个关键词 Google 页数</span>
+                    <input id="editPagesTargetInput" type="number" min="1" max="10" value="3">
+                </label>
+            </div>
+        </form>
+        <div class="modal-foot">
+            <span class="foot-note">提示：直接点击主界面进度条上的步骤节点也可快速回退。</span>
+            <div class="foot-right">
+                <button class="btn ghost" id="rewindCancel" type="button">取消</button>
+                <button class="btn primary" id="rewindSubmit" type="button">确认回退并重新开始</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="toast-host" id="toastHost"></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+/config/config.php
+/storage/installed.lock
+/storage/logs/*.log
+/storage/cache/*
+/storage/sessions/*
+!/storage/logs/.gitkeep
+!/storage/cache/.gitkeep
+!/storage/sessions/.gitkeep
+.DS_Store
+Thumbs.db
+*.zip
+/mobile/node_modules/
+/mobile/.expo/
+/mobile/dist/
+/mobile/android/
+/mobile/ios/
