@@ -2,29 +2,20 @@
 
 当前环境是 **Windows PowerShell**，下面命令可直接复制。
 
-## 一次性准备（只需做一次）
+## 一次性准备（本机不用装 EAS / Node）
 
-```powershell
-npm i -g eas-cli
-eas login
+打包全在 **GitHub Actions 云端**完成。你只需要：
 
-cd d:\WorkSpace\Learn\google\mobile
-npm install
-eas init
-# 确认 app.json → expo.extra.eas.projectId 已不是 REPLACE_WITH_EAS_PROJECT_ID
-```
-
-若 CI 报 yarn / Setup Expo 失败：工作流已改为 `packager: npm`，重新推送即可。
-
-GitHub 仓库 → Settings → Secrets and variables → Actions 新增：
+1. 浏览器打开 https://expo.dev → Access tokens → 新建 token  
+2. GitHub 仓库 → Settings → Secrets and variables → Actions 新增：
 
 | Name | Value |
 | --- | --- |
-| `EXPO_TOKEN` | https://expo.dev 账号 → Access tokens |
+| `EXPO_TOKEN` | 上一步的 token |
 
-没有 `EXPO_TOKEN` 或 `projectId` 仍是占位符时，Actions 会继续失败。
+`mobile/app.json` 里已有 `extra.eas.projectId` 即可（当前仓库已配置）。
 
-先在 GitHub 建好空仓库（不要勾选自动加 README）。
+不要点旧失败 run 的 **Re-run**（还是旧脚本）；推送新 commit，或到 Actions → **Mobile Android APK** → **Run workflow**。
 
 ---
 

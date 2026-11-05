@@ -11,10 +11,15 @@ on:
         options:
           - preview
           - production
-  # Tag v* → production；推 main/master 且改了 mobile 也可手动再跑
   push:
     tags:
       - 'v*'
+    branches:
+      - main
+      - master
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile-android.yml'
 
 concurrency:
   group: mobile-android-${{ github.ref }}
@@ -45,36 +50,40 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: mobile/package-lock.json
 
-      - name: Setup Expo / EAS
-        uses: expo/expo-github-action@v8
-        with:
-          eas-version: latest
-          packager: npm
-          token: ${{ secrets.EXPO_TOKEN }}
+      # 全部装在 GitHub Runner 上，本机无需安装 eas-cli / node 依赖
+      - name: Install EAS CLI (on runner)
+        run: npm install -g eas-cli@latest
 
-      - name: Install dependencies
+      - name: Install app dependencies (on runner)
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Check Expo token
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "${EXPO_TOKEN}" ]; then
+            echo "在 GitHub → Settings → Secrets → Actions 添加 EXPO_TOKEN（expo.dev Access Token）"
+            exit 1
+          fi
+          eas whoami
 
       - name: Verify EAS projectId
         shell: bash
         run: |
-          if grep -q 'REPLACE_WITH_EAS_PROJECT_ID' app.json; then
-            echo "请先在本机执行: cd mobile && eas init，把 app.json 里的 projectId 写好再推送。"
-            exit 1
-          fi
           if ! grep -Eq '"projectId"[[:space:]]*:[[:space:]]*"[0-9a-fA-F-]{36}"' app.json; then
-            echo "app.json 缺少有效的 extra.eas.projectId（UUID）。请先: cd mobile && eas init"
+            echo "mobile/app.json 缺少有效 extra.eas.projectId"
             exit 1
           fi
 
       - name: EAS Build (Android APK)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas build --platform android --profile ${{ steps.profile.outputs.name }} --non-interactive --wait
 
       - name: Print build result tip
-        run: |
-          echo "构建完成。请到 https://expo.dev 下载 APK，或执行: eas build:list --platform android"
+        run: echo "到 https://expo.dev 下载 APK"
