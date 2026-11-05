@@ -40,10 +40,10 @@
       "favicon": "./assets/favicon.png"
     },
     "extra": {
+      "apiBase": "https://google.yzz.me",
       "eas": {
-        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
-      },
-      "apiBase": "https://google.yzz.me"
+        "projectId": "03a39ee7-493d-4cf5-863f-83e835d6fca6"
+      }
     }
   }
 }

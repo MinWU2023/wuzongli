@@ -67,6 +67,10 @@ jobs:
             echo "请先在本机执行: cd mobile && eas init，把 app.json 里的 projectId 写好再推送。"
             exit 1
           fi
+          if ! grep -Eq '"projectId"[[:space:]]*:[[:space:]]*"[0-9a-fA-F-]{36}"' app.json; then
+            echo "app.json 缺少有效的 extra.eas.projectId（UUID）。请先: cd mobile && eas init"
+            exit 1
+          fi
 
       - name: EAS Build (Android APK)
         run: eas build --platform android --profile ${{ steps.profile.outputs.name }} --non-interactive --wait
