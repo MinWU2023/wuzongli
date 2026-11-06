@@ -11,6 +11,7 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { HostApiWebView } from './src/components/HostApiWebView';
 import { CompaniesScreen } from './src/screens/CompaniesScreen';
 import { DialScreen } from './src/screens/DialScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
@@ -95,56 +96,58 @@ export default function App() {
   };
 
   const fontsReady = fontsLoaded || !!fontError || fontWaitTimedOut;
-  if (!fontsReady || !config) {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg }}>
-        <ActivityIndicator color={colors.accent} />
-        <Text style={{ color: colors.textMuted, marginTop: 12 }}>好线索启动中…</Text>
-      </View>
-    );
-  }
+  const booting = !fontsReady || !config;
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer theme={navTheme}>
-        <StatusBar style="dark" />
-        <Tab.Navigator
-          screenOptions={{
-            headerShown: false,
-            tabBarStyle: {
-              backgroundColor: colors.bgElevated,
-              borderTopColor: colors.line,
-              height: 64,
-              paddingBottom: 8,
-              paddingTop: 8,
-            },
-            tabBarActiveTintColor: colors.accent,
-            tabBarInactiveTintColor: colors.textDim,
-            tabBarLabelStyle: {
-              fontFamily: fontsLoaded ? 'DMSans_500Medium' : undefined,
-              fontSize: 11,
-            },
-          }}
-        >
-          <Tab.Screen name="Dial" options={{ title: '接单', tabBarIcon: ({ color }) => <TabGlyph label="☎" color={color} fontsLoaded={fontsLoaded} /> }}>
-            {() => (
-              <DialScreen
-                config={config}
-                onAcceptChange={(acceptOrders) => updateConfig({ ...config, acceptOrders })}
-              />
-            )}
-          </Tab.Screen>
-          <Tab.Screen name="Tasks" options={{ title: '任务', tabBarIcon: ({ color }) => <TabGlyph label="任" color={color} fontsLoaded={fontsLoaded} /> }}>
-            {() => <TasksScreen config={config} />}
-          </Tab.Screen>
-          <Tab.Screen name="Companies" options={{ title: '企业', tabBarIcon: ({ color }) => <TabGlyph label="企" color={color} fontsLoaded={fontsLoaded} /> }}>
-            {() => <CompaniesScreen config={config} />}
-          </Tab.Screen>
-          <Tab.Screen name="Settings" options={{ title: '设置', tabBarIcon: ({ color }) => <TabGlyph label="设" color={color} fontsLoaded={fontsLoaded} /> }}>
-            {() => <SettingsScreen config={config} onSave={updateConfig} />}
-          </Tab.Screen>
-        </Tab.Navigator>
-      </NavigationContainer>
+      {/* InfinityFree aes.js：隐藏 WebView 过主机校验后再调 API */}
+      <HostApiWebView enabled />
+      {booting ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg }}>
+          <ActivityIndicator color={colors.accent} />
+          <Text style={{ color: colors.textMuted, marginTop: 12 }}>好线索启动中…</Text>
+        </View>
+      ) : (
+        <NavigationContainer theme={navTheme}>
+          <StatusBar style="dark" />
+          <Tab.Navigator
+            screenOptions={{
+              headerShown: false,
+              tabBarStyle: {
+                backgroundColor: colors.bgElevated,
+                borderTopColor: colors.line,
+                height: 64,
+                paddingBottom: 8,
+                paddingTop: 8,
+              },
+              tabBarActiveTintColor: colors.accent,
+              tabBarInactiveTintColor: colors.textDim,
+              tabBarLabelStyle: {
+                fontFamily: fontsLoaded ? 'DMSans_500Medium' : undefined,
+                fontSize: 11,
+              },
+            }}
+          >
+            <Tab.Screen name="Dial" options={{ title: '接单', tabBarIcon: ({ color }) => <TabGlyph label="☎" color={color} fontsLoaded={fontsLoaded} /> }}>
+              {() => (
+                <DialScreen
+                  config={config!}
+                  onAcceptChange={(acceptOrders) => updateConfig({ ...config!, acceptOrders })}
+                />
+              )}
+            </Tab.Screen>
+            <Tab.Screen name="Tasks" options={{ title: '任务', tabBarIcon: ({ color }) => <TabGlyph label="任" color={color} fontsLoaded={fontsLoaded} /> }}>
+              {() => <TasksScreen config={config!} />}
+            </Tab.Screen>
+            <Tab.Screen name="Companies" options={{ title: '企业', tabBarIcon: ({ color }) => <TabGlyph label="企" color={color} fontsLoaded={fontsLoaded} /> }}>
+              {() => <CompaniesScreen config={config!} />}
+            </Tab.Screen>
+            <Tab.Screen name="Settings" options={{ title: '设置', tabBarIcon: ({ color }) => <TabGlyph label="设" color={color} fontsLoaded={fontsLoaded} /> }}>
+              {() => <SettingsScreen config={config!} onSave={updateConfig} />}
+            </Tab.Screen>
+          </Tab.Navigator>
+        </NavigationContainer>
+      )}
     </SafeAreaProvider>
   );
 }

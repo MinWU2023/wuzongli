@@ -1,4 +1,11 @@
 import type { Company, DialJob, PipelineTask, ServerSettings } from './types';
+import {
+  browserHeaders,
+  hostApiFetch,
+  isSecurityChallengeHtml,
+  looksLikeJson,
+  warmHost,
+} from './hostApi';
 
 export class ApiError extends Error {
   code: string;
@@ -23,7 +30,6 @@ function normalizeBase(base: string): string {
   return String(base || '').trim().replace(/\/+$/, '');
 }
 
-// React Native 的 URL / URLSearchParams 实现不完整，这里手工拼接查询串
 function buildUrl(base: string, path: string, query?: RequestOptions['query']): string {
   const pairs: string[] = [];
   if (query) {
@@ -32,7 +38,49 @@ function buildUrl(base: string, path: string, query?: RequestOptions['query']): 
       pairs.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(value)));
     });
   }
-  return normalizeBase(base) + path + (pairs.length ? '?' + pairs.join('&') : '');
+  const prefix = base ? normalizeBase(base) : '';
+  return prefix + path + (pairs.length ? '?' + pairs.join('&') : '');
+}
+
+function parseApiPayload(text: string, status: number): any {
+  if (!text || !looksLikeJson(text)) {
+    if (isSecurityChallengeHtml(text)) {
+      throw new ApiError(
+        '主机开启了浏览器安全校验（常见于 InfinityFree）。请确认 App 已更新，或换可直连的主机。',
+        'host_security',
+        status
+      );
+    }
+    throw new ApiError('服务器返回了非 JSON 内容，请确认域名与伪静态。', 'invalid_json', status);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ApiError('服务器返回了非 JSON 内容，请确认域名与伪静态。', 'invalid_json', status);
+  }
+}
+
+async function nativeFetch(
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  timeout: number
+): Promise<{ status: number; text: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body,
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    return { status: response.status, text };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function apiRequest<T = unknown>(
@@ -45,39 +93,65 @@ export async function apiRequest<T = unknown>(
   if (!cleanBase) throw new ApiError('请先配置 API 地址', 'missing_api_base');
   if (!apiKey) throw new ApiError('请先填写 API Key', 'missing_api_key');
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeout || 25000);
+  const method = (options.method || 'GET').toUpperCase();
+  const timeout = options.timeout || 25000;
+  const fullPath = buildUrl('', path, options.query); // path + query only
+  const headers = browserHeaders({
+    'Content-Type': 'application/json',
+    'X-API-Key': apiKey,
+  });
+  const bodyStr = options.body ? JSON.stringify(options.body) : undefined;
+
   try {
-    const response = await fetch(buildUrl(cleanBase, path, options.query), {
-      method: options.method || 'GET',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
-      },
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: controller.signal,
-    });
-    const text = await response.text();
-    let payload: any = null;
     try {
-      payload = text ? JSON.parse(text) : null;
+      await warmHost(cleanBase);
     } catch {
-      throw new ApiError('服务器返回了非 JSON 内容，请确认域名与伪静态。', 'invalid_json', response.status);
+      // continue — WebView may still warm on bridge fetch
     }
-    if (!response.ok || !payload || payload.ok !== true) {
-      const err = payload?.error || {};
-      throw new ApiError(err.message || `请求失败（HTTP ${response.status}）`, err.code || 'request_failed', response.status);
+
+    let status = 0;
+    let text = '';
+    try {
+      const native = await nativeFetch(cleanBase + fullPath, method, headers, bodyStr, timeout);
+      status = native.status;
+      text = native.text;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new ApiError('请求超时，请检查网络或主机响应。', 'timeout');
+      }
+      text = '';
+      status = 0;
     }
-    return payload.data as T;
+
+    if (!looksLikeJson(text) || isSecurityChallengeHtml(text) || status === 0) {
+      const bridged = await hostApiFetch({
+        base: cleanBase,
+        path: fullPath,
+        method,
+        headers,
+        body: bodyStr ?? null,
+        timeout: Math.max(timeout, 35000),
+      });
+      status = bridged.status;
+      text = bridged.text;
+    }
+
+    const payload = parseApiPayload(text, status);
+    if (payload?.ok === true) {
+      return payload.data as T;
+    }
+    const err = payload?.error || {};
+    throw new ApiError(
+      err.message || `请求失败（HTTP ${status || '桥接'}）`,
+      err.code || 'request_failed',
+      status
+    );
   } catch (error) {
     if (error instanceof ApiError) throw error;
     if (error instanceof Error && error.name === 'AbortError') {
       throw new ApiError('请求超时，请检查网络或主机响应。', 'timeout');
     }
     throw new ApiError(error instanceof Error ? error.message : '网络异常', 'network_error');
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -129,21 +203,51 @@ export function searchCompanies(
 }
 
 export async function healthCheck(base: string) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+  const cleanBase = normalizeBase(base);
+  if (!cleanBase) throw new ApiError('请先配置 API 地址', 'missing_api_base');
+  const headers = browserHeaders();
+  const path = '/api/health';
+
   try {
-    const response = await fetch(normalizeBase(base) + '/api/health', {
-      cache: 'no-store',
-      signal: controller.signal,
-    });
-    const payload = await response.json();
-    if (!payload?.ok) throw new ApiError('健康检查失败', 'health_failed', response.status);
+    try {
+      await warmHost(cleanBase);
+    } catch {
+      // ignore
+    }
+
+    let status = 0;
+    let text = '';
+    try {
+      const native = await nativeFetch(cleanBase + path, 'GET', headers, undefined, 15000);
+      status = native.status;
+      text = native.text;
+    } catch {
+      text = '';
+      status = 0;
+    }
+
+    if (!looksLikeJson(text) || isSecurityChallengeHtml(text) || status === 0) {
+      const bridged = await hostApiFetch({
+        base: cleanBase,
+        path,
+        method: 'GET',
+        headers,
+        body: null,
+        timeout: 35000,
+      });
+      status = bridged.status;
+      text = bridged.text;
+    }
+
+    const payload = parseApiPayload(text, status);
+    if (!payload?.ok) throw new ApiError('健康检查失败', 'health_failed', status);
     return payload.data as { app?: string; version?: string; php?: string };
   } catch (error) {
     if (error instanceof ApiError) throw error;
-    throw new ApiError('无法连接服务器，请检查 API 地址。', 'network_error');
-  } finally {
-    clearTimeout(timer);
+    throw new ApiError(
+      error instanceof Error ? error.message : '无法连接服务器，请检查 API 地址。',
+      'network_error'
+    );
   }
 }
 
