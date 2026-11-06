@@ -99,38 +99,78 @@ jobs:
       - name: Prebuild native Android project
         run: npx expo prebuild --platform android --non-interactive
 
-      # release 用 debug 签名即可内测安装；禁止回退 assembleDebug（debug 不含 JS bundle，手机必红屏）
-      - name: Ensure release signing works
-        if: steps.variant.outputs.name == 'release'
-        working-directory: mobile/android/app
+      # 体积：默认 universal APK 含 4 种 ABI，原生库会到 100MB+；只留手机 arm64 + 开启压缩
+      - name: Slim Android release build
         shell: bash
         run: |
           python3 <<'PY'
           from pathlib import Path
-          path = Path("build.gradle")
-          text = path.read_text(encoding="utf-8")
-          # Expo 模板常见：release 未配置签名会失败；强制指向 debug 签名
-          if "signingConfigs.release" not in text and "storeFile" not in text.split("release {", 1)[-1][:400]:
-              pass
-          # 无论模板如何，保证 release buildType 使用 debug 签名配置
           import re
-          text2, n = re.subn(
+
+          props = Path("android/gradle.properties")
+          text = props.read_text(encoding="utf-8") if props.exists() else ""
+          lines = []
+          for line in text.splitlines():
+              if line.startswith("reactNativeArchitectures="):
+                  continue
+              if line.startswith("android.enableMinifyInReleaseBuilds="):
+                  continue
+              if line.startswith("android.enableShrinkResourcesInReleaseBuilds="):
+                  continue
+              lines.append(line)
+          lines += [
+              "reactNativeArchitectures=arm64-v8a",
+              "android.enableMinifyInReleaseBuilds=true",
+              "android.enableShrinkResourcesInReleaseBuilds=true",
+          ]
+          props.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print("gradle.properties: arm64-v8a + minify/shrink")
+
+          app_gradle = Path("android/app/build.gradle")
+          g = app_gradle.read_text(encoding="utf-8")
+
+          # 只打 arm64，避免 x86/x86_64/armeabi 一起打进一个包
+          if "abiFilters" not in g:
+              g, n = re.subn(
+                  r"(defaultConfig\s*\{)",
+                  r"\1\n        ndk {\n            abiFilters \"arm64-v8a\"\n        }",
+                  g,
+                  count=1,
+              )
+              print(f"abiFilters patched={n}")
+
+          # release 用 debug 签名（内测）；并打开 minify/shrink
+          g2, n = re.subn(
               r"(buildTypes\s*\{[\s\S]*?release\s*\{[\s\S]*?)signingConfig\s+[^\n]+",
               r"\1signingConfig signingConfigs.debug",
-              text,
+              g,
               count=1,
           )
           if n == 0:
-              text2, n = re.subn(
+              g2, n = re.subn(
                   r"(buildTypes\s*\{[\s\S]*?release\s*\{)",
                   r"\1\n            signingConfig signingConfigs.debug",
-                  text,
+                  g,
                   count=1,
               )
           if n == 0:
-              raise SystemExit("cannot patch release signingConfig in app/build.gradle")
-          path.write_text(text2, encoding="utf-8")
-          print("release signingConfig -> debug")
+              raise SystemExit("cannot patch release signingConfig")
+          g = g2
+
+          if "minifyEnabled" not in g.split("release {", 1)[-1][:800]:
+              g, n = re.subn(
+                  r"(buildTypes\s*\{[\s\S]*?release\s*\{)",
+                  r"\1\n            minifyEnabled true\n            shrinkResources true\n            proguardFiles getDefaultProguardFile(\"proguard-android-optimize.txt\"), \"proguard-rules.pro\"",
+                  g,
+                  count=1,
+              )
+              print(f"minify patched={n}")
+          else:
+              g = re.sub(r"minifyEnabled\s+false", "minifyEnabled true", g)
+              g = re.sub(r"shrinkResources\s+false", "shrinkResources true", g)
+
+          app_gradle.write_text(g, encoding="utf-8")
+          print("app/build.gradle slimmed")
           PY
 
       - name: Bundle JS into Android assets

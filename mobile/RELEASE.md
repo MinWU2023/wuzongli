@@ -1,5 +1,10 @@
 # APK 打包说明（GitHub Actions，无 Expo EAS）
 
+## 为什么 APK 曾经 120MB+
+
+React Native / Expo 默认会把 **4 种 CPU 架构**（arm64 / armeabi / x86 / x86_64）的原生库打进同一个 APK，体积会翻几倍。  
+当前 CI 已改为 **只打 `arm64-v8a`（几乎所有近年安卓机）+ R8 压缩**，一般可降到大约几十 MB。老旧 32 位机装不了属预期。
+
 ## 红屏「Unable to load script」
 
 说明装到的是 **debug 包**（要连电脑 Metro）。正式内测必须装 **release** APK（内含 `index.android.bundle`）。  
