@@ -465,9 +465,18 @@ final class PipelineService
         $data = $this->handleSerp($taskId, $keywordId, $page, $response['results'], null, false, 'serper');
         $data['provider'] = 'serper';
         $data['credits'] = $response['credits'];
-        if ($response['credits'] !== null && $response['credits'] < 100) {
-            $this->tasks->log($taskId, 'serp', 'warning', 'Serper 余额不足 100 次，请及时充值。', [
+        $data['serper_account_id'] = $response['account_id'] ?? null;
+        $data['serper_account_name'] = $response['account_name'] ?? null;
+        if (!empty($response['account_name'])) {
+            $this->tasks->log($taskId, 'serp', 'info', 'Serper 使用账号：' . $response['account_name'], [
+                'account_id' => $response['account_id'] ?? null,
                 'credits' => $response['credits'],
+            ]);
+        }
+        if ($response['credits'] !== null && $response['credits'] < 100) {
+            $this->tasks->log($taskId, 'serp', 'warning', 'Serper 余额不足 100 次，请及时充值或添加备用账号。', [
+                'credits' => $response['credits'],
+                'account_id' => $response['account_id'] ?? null,
             ]);
         }
         return $data;

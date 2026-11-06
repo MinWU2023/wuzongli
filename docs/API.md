@@ -356,7 +356,7 @@ App 领取最早一通 `pending`，状态改为 `claimed`。无任务时 `job` �
 
 ### `POST /api/tasks/{id}/serp/serper`
 
-服务端通过 Serper.dev 获取 Google 结果。插件**不发送 API Key**：Key 以 AES-256-GCM 加密保存在 `settings` 表，只由 PHP 服务端解密使用。
+服务端通过 Serper.dev 获取 Google 结果。插件**不必**依赖本地 Key：后台「Serper 账号」表存储多个加密 Key，同一时间启用一个；额度用尽或 401/429 时自动切换下一个。
 
 请求：
 
@@ -364,7 +364,7 @@ App 领取最早一通 `pending`，状态改为 `claimed`。无任务时 `job` �
 { "keyword_id": 7, "page": 2 }
 ```
 
-成功时返回与 `POST /serp` 相同的入库结果，并附带 Serper 余额：
+成功时返回与 `POST /serp` 相同的入库结果，并附带 Serper 余额与账号信息：
 
 ```json
 {

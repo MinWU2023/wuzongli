@@ -146,6 +146,10 @@ final class TaskController extends ApiController
     public function settings(): never
     {
         $serperKey = \App\Services\SerperService::apiKey();
+        $serperCurrent = (new \App\Services\SerperAccountService())->current();
+        $serperCount = (int) (Db::instance()->value(
+            'SELECT COUNT(*) FROM `' . Db::instance()->tableName('serper_accounts') . '` WHERE `is_enabled` = 1'
+        ) ?? 0);
         $relay = Db::instance()->table('ai_relays')->orderBy('priority')->orderBy('id')->first();
         $aiMasked = '';
         if ($relay !== null) {
@@ -158,6 +162,14 @@ final class TaskController extends ApiController
             'serper_masked' => \App\Core\Crypto::mask($serperKey),
             'serper_gl' => (string) \App\Services\Settings::get('serper_gl', 'us'),
             'serper_hl' => (string) \App\Services\Settings::get('serper_hl', 'en'),
+            'serper_accounts' => $serperCount,
+            'serper_current' => $serperCurrent === null ? null : [
+                'id' => (int) $serperCurrent['id'],
+                'name' => (string) $serperCurrent['name'],
+                'masked_key' => (string) ($serperCurrent['masked_key'] ?? ''),
+                'credits' => $serperCurrent['credits'],
+                'status' => (string) ($serperCurrent['status'] ?? 'ready'),
+            ],
             'ai_relay' => $relay === null ? null : [
                 'id' => (int) $relay['id'],
                 'name' => (string) $relay['name'],
@@ -174,8 +186,19 @@ final class TaskController extends ApiController
         $serperKey = trim($this->request->string('serper_api_key'));
         $provider = strtolower(trim($this->request->string('search_provider', '')));
         $updates = [];
+        // 单 Key 写入已废弃；若插件仍上传 serper_api_key，则追加为备用账号
         if ($serperKey !== '') {
-            $updates['serper_api_key'] = \App\Core\Crypto::encrypt($serperKey);
+            $accounts = new \App\Services\SerperAccountService();
+            if ($accounts->currentApiKey() === '') {
+                $accounts->create([
+                    'name' => '插件同步账号',
+                    'api_key' => $serperKey,
+                    'priority' => 10,
+                    'is_enabled' => 1,
+                    'is_current' => 1,
+                    'developer_info' => '由插件 /api/settings 同步创建',
+                ]);
+            }
         }
         if (in_array($provider, ['auto', 'serper', 'browser'], true)) {
             $updates['search_provider'] = $provider;

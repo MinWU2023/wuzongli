@@ -66,26 +66,31 @@
                 <div class="form-grid">
                     <label class="field span-2"><span>搜索数据源</span>
                         <select name="search_provider">
-                            <option value="auto" <?= $serperProvider === 'auto' ? 'selected' : '' ?>>自动（配置 Key 后优先 Serper）</option>
+                            <option value="auto" <?= $serperProvider === 'auto' ? 'selected' : '' ?>>自动（有可用账号后优先 Serper）</option>
                             <option value="serper" <?= $serperProvider === 'serper' ? 'selected' : '' ?>>强制使用 Serper</option>
                             <option value="browser" <?= $serperProvider === 'browser' ? 'selected' : '' ?>>浏览器抓取 Google</option>
                         </select>
-                        <small>Serper 失败时不会自动降级，避免悄悄绕过你的选择</small>
+                        <small>API Key 请到「Serper 账号」列表管理，支持多账号轮换</small>
                     </label>
-                    <label class="field span-2"><span>Serper API Key</span>
-                        <input type="password" name="serper_api_key" value="" placeholder="<?= $serperConfigured ? e('已配置 ' . $serperMasked . '，留空不修改') : '粘贴 serper.dev API Key' ?>" autocomplete="off">
-                        <small>使用 AES-256-GCM 加密入库，不会下发给插件</small>
-                    </label>
-                    <label class="field span-4"><span>Serper 接口地址</span>
+                    <div class="field span-2">
+                        <span>Serper 账号</span>
+                        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px">
+                            <span class="badge <?= $serperConfigured ? 'soft-approved' : 'soft-error' ?>">
+                                <?= $serperConfigured ? e('已配置 ' . $serperMasked) : '未配置可用账号' ?>
+                            </span>
+                            <a class="btn small ghost" href="<?= e(url('/admin/serper')) ?>">管理账号列表 →</a>
+                        </div>
+                    </div>
+                    <label class="field span-4"><span>默认接口地址</span>
                         <input name="serper_base_url" value="<?= e($settings['serper_base_url'] ?? 'https://google.serper.dev/search') ?>">
-                        <small>默认 https://google.serper.dev/search，使用代理时才需要修改</small>
+                        <small>账号未单独填写接口时使用此地址</small>
                     </label>
                     <label class="field"><span>国家代码</span><input name="serper_gl" value="<?= e($settings['serper_gl'] ?? 'us') ?>" maxlength="2"><small>us / uk / de</small></label>
                     <label class="field"><span>语言代码</span><input name="serper_hl" value="<?= e($settings['serper_hl'] ?? 'en') ?>" maxlength="5"><small>en / zh-cn</small></label>
                     <label class="field span-2"><span>超时（秒）</span><input type="number" name="serper_timeout" value="<?= (int) ($settings['serper_timeout'] ?? 30) ?>" min="5" max="60"><small>5–60 秒</small></label>
                 </div>
                 <div class="notice info small">
-                    Serper 模式需要服务器能访问 <code>google.serper.dev</code>。启用后不会触发 Google 页面验证，也不再需要 Google 域名和请求间隔。
+                    额度用尽或 Key 失效时会自动启用下一个可用账号。服务器需能访问 <code>google.serper.dev</code>。
                 </div>
             </div>
 

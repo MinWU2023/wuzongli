@@ -11,9 +11,8 @@ use App\Core\Url;
 /**
  * Serper.dev Google Search API client.
  *
- * The API key is stored encrypted in the settings table and is only decrypted
- * in memory. The browser extension never sees or sends this key: it asks the
- * backend for the next SERP page and the backend performs the search.
+ * Keys live in serper_accounts (encrypted). One account is current; when it is
+ * exhausted/invalid the service rotates to the next enabled account.
  */
 final class SerperService
 {
@@ -26,19 +25,27 @@ final class SerperService
 
     public static function apiKey(): string
     {
+        $fromAccount = (new SerperAccountService())->currentApiKey();
+        if ($fromAccount !== '') {
+            return $fromAccount;
+        }
+        // 兼容尚未迁移的旧 settings
         return trim(Settings::secret('serper_api_key'));
     }
 
-    public static function endpoint(): string
+    public static function endpoint(?string $override = null): string
     {
+        if ($override !== null && trim($override) !== '') {
+            return trim($override);
+        }
+        $current = (new SerperAccountService())->current();
+        if ($current !== null && !empty($current['endpoint'])) {
+            return (string) $current['endpoint'];
+        }
         $endpoint = trim((string) Settings::get('serper_base_url', self::DEFAULT_ENDPOINT));
         return $endpoint !== '' ? $endpoint : self::DEFAULT_ENDPOINT;
     }
 
-    /**
-     * Resolve "auto" to Serper when a key is available, otherwise use the
-     * browser-side Google fetcher.
-     */
     public static function effectiveProvider(): string
     {
         $provider = strtolower(trim((string) Settings::get('search_provider', 'auto')));
@@ -52,7 +59,7 @@ final class SerperService
     }
 
     /**
-     * @return array{results: array<int, array{title:string,url:string,snippet:string,position:int}>, credits: int|null}
+     * @return array{results: array<int, array{title:string,url:string,snippet:string,position:int}>, credits: int|null, account_id: int|null, account_name: string|null}
      */
     public function search(string $query, int $page = 1, string $language = 'en', ?string $overrideApiKey = null): array
     {
@@ -60,13 +67,81 @@ final class SerperService
         if ($query === '') {
             throw HttpException::validation('Serper 搜索关键词不能为空');
         }
-        $apiKey = $overrideApiKey !== null && trim($overrideApiKey) !== '' ? trim($overrideApiKey) : self::apiKey();
-        if ($apiKey === '') {
-            throw new HttpException(503, '尚未配置 Serper API Key，请在插件设置或后台系统设置中填写。', 'serper_not_configured');
+
+        $accounts = new SerperAccountService();
+        $tried = [];
+        $lastError = null;
+
+        // 显式覆盖 Key（插件旧逻辑）时不做账号轮换
+        if ($overrideApiKey !== null && trim($overrideApiKey) !== '') {
+            return $this->requestOnce($query, $page, $language, trim($overrideApiKey), self::endpoint(), null, null);
         }
 
+        for ($attempt = 0; $attempt < 8; $attempt++) {
+            $current = $accounts->current();
+            if ($current === null) {
+                break;
+            }
+            $accountId = (int) $current['id'];
+            if (isset($tried[$accountId])) {
+                break;
+            }
+            $tried[$accountId] = true;
+            $apiKey = (string) ($current['api_key'] ?? '');
+            if ($apiKey === '') {
+                $accounts->rotateAfterFailure($accountId, 'API Key 为空', 'error');
+                continue;
+            }
+            try {
+                $result = $this->requestOnce(
+                    $query,
+                    $page,
+                    $language,
+                    $apiKey,
+                    self::endpoint(isset($current['endpoint']) ? (string) $current['endpoint'] : null),
+                    $accountId,
+                    (string) $current['name']
+                );
+                $accounts->markSuccess($accountId, $result['credits']);
+                return $result;
+            } catch (HttpException $e) {
+                $lastError = $e;
+                if (in_array($e->errorCode, ['serper_unauthorized', 'serper_rate_limited'], true)) {
+                    $status = $e->errorCode === 'serper_unauthorized' ? 'error' : 'exhausted';
+                    $next = $accounts->rotateAfterFailure($accountId, $e->getMessage(), $status);
+                    if ($next === null) {
+                        throw $e;
+                    }
+                    Logger::info('Serper rotated account', [
+                        'from' => $accountId,
+                        'to' => (int) $next['id'],
+                        'reason' => $e->errorCode,
+                    ]);
+                    continue;
+                }
+                throw $e;
+            }
+        }
+
+        if ($lastError instanceof HttpException) {
+            throw $lastError;
+        }
+        throw new HttpException(503, '尚未配置可用的 Serper 账号，请在后台「Serper 账号」中添加并启用。', 'serper_not_configured');
+    }
+
+    /**
+     * @return array{results: array<int, array{title:string,url:string,snippet:string,position:int}>, credits: int|null, account_id: int|null, account_name: string|null}
+     */
+    private function requestOnce(
+        string $query,
+        int $page,
+        string $language,
+        string $apiKey,
+        string $endpoint,
+        ?int $accountId,
+        ?string $accountName
+    ): array {
         $page = max(1, min(10, $page));
-        $endpoint = self::endpoint();
         if (!filter_var($endpoint, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $endpoint)) {
             throw new HttpException(503, 'Serper 接口地址配置不正确。', 'serper_not_configured');
         }
@@ -116,6 +191,7 @@ final class SerperService
             'page' => $page,
             'status' => $status,
             'duration_ms' => $duration,
+            'account_id' => $accountId,
         ]);
 
         if (!is_string($raw) || $raw === '') {
@@ -128,10 +204,10 @@ final class SerperService
         }
 
         if ($status === 401 || $status === 403) {
-            throw new HttpException(502, 'Serper API Key 无效或已过期，请在后台重新填写。', 'serper_unauthorized', ['status' => $status]);
+            throw new HttpException(502, 'Serper API Key 无效或已过期。', 'serper_unauthorized', ['status' => $status]);
         }
         if ($status === 429) {
-            throw new HttpException(502, 'Serper 请求过于频繁或额度不足，请稍后再试。', 'serper_rate_limited', ['status' => $status]);
+            throw new HttpException(502, 'Serper 请求过于频繁或额度不足。', 'serper_rate_limited', ['status' => $status]);
         }
         if ($status < 200 || $status >= 300) {
             $message = $decoded['message'] ?? $decoded['error'] ?? ('HTTP ' . $status);
@@ -167,6 +243,8 @@ final class SerperService
         return [
             'results' => $results,
             'credits' => isset($decoded['credits']) && is_numeric($decoded['credits']) ? (int) $decoded['credits'] : null,
+            'account_id' => $accountId,
+            'account_name' => $accountName,
         ];
     }
 }

@@ -93,8 +93,14 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Install JS dependencies
+        env:
+          # 避免 NODE_ENV=production 跳过打包所需依赖
+          NODE_ENV: development
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          # 双保险：CI 必须能跑 bundle
+          npm install --no-save @react-native-community/cli@15.1.3 @react-native-community/cli-platform-android@15.1.3
+          npx react-native --version || npx @react-native-community/cli --version
 
       - name: Prebuild native Android project
         run: npx expo prebuild --platform android --non-interactive
@@ -177,19 +183,29 @@ jobs:
         if: steps.variant.outputs.name == 'release'
         run: |
           mkdir -p android/app/src/main/assets
-          npx react-native bundle \
+          # 优先 expo；失败则用已安装的 community CLI
+          if ! npx expo export:embed \
             --platform android \
             --dev false \
-            --minify true \
             --entry-file node_modules/expo/AppEntry.js \
             --bundle-output android/app/src/main/assets/index.android.bundle \
-            --assets-dest android/app/src/main/res
+            --assets-dest android/app/src/main/res; then
+            echo "expo export:embed failed, fallback to community CLI"
+            npx @react-native-community/cli bundle \
+              --platform android \
+              --dev false \
+              --minify true \
+              --entry-file node_modules/expo/AppEntry.js \
+              --bundle-output android/app/src/main/assets/index.android.bundle \
+              --assets-dest android/app/src/main/res
+          fi
           test -s android/app/src/main/assets/index.android.bundle
 
       - name: Gradle assemble
         working-directory: mobile/android
         env:
           NODE_ENV: production
+          EXPO_NO_TELEMETRY: 1
         run: |
           chmod +x gradlew
           if [ "${{ steps.variant.outputs.name }}" = "release" ]; then

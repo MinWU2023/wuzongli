@@ -50,15 +50,8 @@ final class SettingsController extends AdminController
         if (!in_array($provider, ['auto', 'serper', 'browser'], true)) {
             $provider = 'auto';
         }
-        $keyInput = trim((string) $this->request->input('serper_api_key', ''));
-        $storedKey = (string) Settings::get('serper_api_key', '');
-        if ($keyInput !== '') {
-            $storedKey = Crypto::encrypt($keyInput);
-        } elseif ($storedKey !== '' && !str_starts_with($storedKey, 'enc:v1:')) {
-            $storedKey = Crypto::encrypt($storedKey);
-        }
-        if ($provider === 'serper' && $storedKey === '') {
-            flash('error', '选择「强制使用 Serper」时必须填写 Serper API Key。');
+        if ($provider === 'serper' && !SerperService::configured()) {
+            flash('error', '选择「强制使用 Serper」前请先在「Serper 账号」添加并启用至少一个 API Key。');
             $this->back();
         }
         $serperBase = trim($this->request->string('serper_base_url', SerperService::DEFAULT_ENDPOINT));
@@ -90,7 +83,6 @@ final class SettingsController extends AdminController
             'google_domain' => $googleDomain,
             'ai_json_mode' => $this->request->boolean('ai_json_mode') ? 1 : 0,
             'search_provider' => $provider,
-            'serper_api_key' => $storedKey,
             'serper_base_url' => $serperBase,
             'serper_gl' => $serperGl,
             'serper_hl' => $serperHl,

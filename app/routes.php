@@ -74,6 +74,15 @@ $router->get('/admin/prompts', 'Admin/Prompts@index');
 $router->get('/admin/prompts/{id}/edit', 'Admin/Prompts@edit');
 $router->post('/admin/prompts/{id}', 'Admin/Prompts@update');
 
+$router->get('/admin/serper', 'Admin/SerperAccounts@index');
+$router->get('/admin/serper/create', 'Admin/SerperAccounts@create');
+$router->post('/admin/serper', 'Admin/SerperAccounts@store');
+$router->get('/admin/serper/{id}/edit', 'Admin/SerperAccounts@edit');
+$router->post('/admin/serper/{id}', 'Admin/SerperAccounts@update');
+$router->post('/admin/serper/{id}/delete', 'Admin/SerperAccounts@delete');
+$router->post('/admin/serper/{id}/activate', 'Admin/SerperAccounts@activate');
+$router->post('/admin/serper/{id}/test', 'Admin/SerperAccounts@test');
+
 $router->get('/admin/settings', 'Admin/Settings@index');
 $router->post('/admin/settings', 'Admin/Settings@update');
 $router->post('/admin/settings/test-serper', 'Admin/Settings@testSerper');
