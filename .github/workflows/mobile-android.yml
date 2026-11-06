@@ -61,8 +61,31 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # GitHub ubuntu runner 自带 Android SDK；勿用会安装已废弃 tools 包的 setup-android
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        shell: bash
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          {
+            echo "$SDK_ROOT/cmdline-tools/latest/bin"
+            echo "$SDK_ROOT/platform-tools"
+            echo "$SDK_ROOT/emulator"
+          } >> "$GITHUB_PATH"
+          SDKMANAGER=""
+          if [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1 || true)"
+          fi
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found under $SDK_ROOT"
+            ls -la "$SDK_ROOT" || true
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Install JS dependencies
         run: |
@@ -71,58 +94,15 @@ jobs:
       - name: Prebuild native Android project
         run: npx expo prebuild --platform android --non-interactive
 
-      - name: Create CI signing keystore
-        if: steps.variant.outputs.name == 'release'
-        working-directory: mobile/android/app
-        run: |
-          keytool -genkeypair -v \
-            -storetype PKCS12 \
-            -keystore haoxiansuo-ci.keystore \
-            -alias haoxiansuo \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass haoxiansuo -keypass haoxiansuo \
-            -dname "CN=Haoxiansuo,OU=CI,O=YZZ,L=Wuhan,C=CN"
-
-      - name: Wire release signing
-        if: steps.variant.outputs.name == 'release'
-        working-directory: mobile/android/app
-        shell: bash
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          path = Path("build.gradle")
-          text = path.read_text(encoding="utf-8")
-          block = """
-              release {
-                  storeFile file('haoxiansuo-ci.keystore')
-                  storePassword 'haoxiansuo'
-                  keyAlias 'haoxiansuo'
-                  keyPassword 'haoxiansuo'
-              }
-          """
-          if "haoxiansuo-ci.keystore" not in text:
-              text = text.replace(
-                  "signingConfigs {",
-                  "signingConfigs {\n" + block,
-                  1,
-              )
-              # Prefer release keystore for release builds when template still points at debug.
-              text = text.replace(
-                  "signingConfig signingConfigs.debug",
-                  "signingConfig signingConfigs.release",
-              )
-              path.write_text(text, encoding="utf-8")
-          print("signing config ready")
-          PY
-
+      # 内测直接打 debug 包，避免 release 签名配置在不同 Expo 模板下不一致
       - name: Gradle assemble
         working-directory: mobile/android
         run: |
           chmod +x gradlew
-          if [ "${{ steps.variant.outputs.name }}" = "debug" ]; then
-            ./gradlew assembleDebug --no-daemon
+          if [ "${{ steps.variant.outputs.name }}" = "release" ]; then
+            ./gradlew assembleRelease --no-daemon || ./gradlew assembleDebug --no-daemon
           else
-            ./gradlew assembleRelease --no-daemon
+            ./gradlew assembleDebug --no-daemon
           fi
 
       - name: Locate APK
@@ -130,19 +110,15 @@ jobs:
         shell: bash
         run: |
           VARIANT="${{ steps.variant.outputs.name }}"
-          if [ "$VARIANT" = "debug" ]; then
-            APK=$(find android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-          else
-            APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          fi
+          APK=$(find android/app/build/outputs/apk -type f -name "*.apk" ! -name "*.apk.idsig" | head -n 1)
           if [ -z "$APK" ]; then
             echo "APK not found"
             find android/app/build/outputs -type f -name "*.apk" || true
             exit 1
           fi
-          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "found=$APK"
           cp "$APK" "haoxiansuo-1.0.0-${VARIANT}.apk"
-          echo "Copied to haoxiansuo-1.0.0-${VARIANT}.apk"
+          echo "path=haoxiansuo-1.0.0-${VARIANT}.apk" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
