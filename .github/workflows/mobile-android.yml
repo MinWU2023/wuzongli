@@ -98,9 +98,9 @@ jobs:
           NODE_ENV: development
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
-          # 双保险：CI 必须能跑 bundle
-          npm install --no-save @react-native-community/cli@15.1.3 @react-native-community/cli-platform-android@15.1.3
-          npx react-native --version || npx @react-native-community/cli --version
+          test -d node_modules/expo-asset
+          test -f metro.config.js
+          npx @react-native-community/cli --version
 
       - name: Prebuild native Android project
         run: npx expo prebuild --platform android --non-interactive
@@ -126,8 +126,9 @@ jobs:
               lines.append(line)
           lines += [
               "reactNativeArchitectures=arm64-v8a",
-              "android.enableMinifyInReleaseBuilds=true",
-              "android.enableShrinkResourcesInReleaseBuilds=true",
+              # 先关 R8，避免 RN/Expo release 被错误裁剪；体积主要靠单 ABI
+              "android.enableMinifyInReleaseBuilds=false",
+              "android.enableShrinkResourcesInReleaseBuilds=false",
           ]
           props.write_text("\n".join(lines) + "\n", encoding="utf-8")
           print("gradle.properties: arm64-v8a + minify/shrink")
@@ -163,44 +164,22 @@ jobs:
               raise SystemExit("cannot patch release signingConfig")
           g = g2
 
+          g = re.sub(r"minifyEnabled\s+true", "minifyEnabled false", g)
+          g = re.sub(r"shrinkResources\s+true", "shrinkResources false", g)
           if "minifyEnabled" not in g.split("release {", 1)[-1][:800]:
               g, n = re.subn(
                   r"(buildTypes\s*\{[\s\S]*?release\s*\{)",
-                  r"\1\n            minifyEnabled true\n            shrinkResources true\n            proguardFiles getDefaultProguardFile(\"proguard-android-optimize.txt\"), \"proguard-rules.pro\"",
+                  r"\1\n            minifyEnabled false\n            shrinkResources false",
                   g,
                   count=1,
               )
-              print(f"minify patched={n}")
-          else:
-              g = re.sub(r"minifyEnabled\s+false", "minifyEnabled true", g)
-              g = re.sub(r"shrinkResources\s+false", "shrinkResources true", g)
+              print(f"minify disabled patched={n}")
 
           app_gradle.write_text(g, encoding="utf-8")
           print("app/build.gradle slimmed")
           PY
 
-      - name: Bundle JS into Android assets
-        if: steps.variant.outputs.name == 'release'
-        run: |
-          mkdir -p android/app/src/main/assets
-          # 优先 expo；失败则用已安装的 community CLI
-          if ! npx expo export:embed \
-            --platform android \
-            --dev false \
-            --entry-file node_modules/expo/AppEntry.js \
-            --bundle-output android/app/src/main/assets/index.android.bundle \
-            --assets-dest android/app/src/main/res; then
-            echo "expo export:embed failed, fallback to community CLI"
-            npx @react-native-community/cli bundle \
-              --platform android \
-              --dev false \
-              --minify true \
-              --entry-file node_modules/expo/AppEntry.js \
-              --bundle-output android/app/src/main/assets/index.android.bundle \
-              --assets-dest android/app/src/main/res
-          fi
-          test -s android/app/src/main/assets/index.android.bundle
-
+      # 由 Expo/RN Gradle 在 assembleRelease 时打包 JS（需 metro.config.js + expo-asset）
       - name: Gradle assemble
         working-directory: mobile/android
         env:
