@@ -17,7 +17,7 @@ import { SettingsScreen } from './src/screens/SettingsScreen';
 import { TasksScreen } from './src/screens/TasksScreen';
 import { loadConfig, saveConfig } from './src/storage';
 import { colors } from './src/theme';
-import type { AppConfig } from './src/types';
+import type { AppConfig } from './types';
 
 const Tab = createBottomTabNavigator();
 
@@ -36,16 +36,42 @@ const navTheme = {
 };
 
 export default function App() {
-  const [fontsLoaded] = useFonts({
+  const [fontsLoaded, fontError] = useFonts({
     DMSans_400Regular,
     DMSans_500Medium,
     DMSans_700Bold,
     Fraunces_600SemiBold,
   });
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [fontWaitTimedOut, setFontWaitTimedOut] = useState(false);
 
   useEffect(() => {
-    loadConfig().then(setConfig);
+    let alive = true;
+    loadConfig()
+      .then((cfg) => {
+        if (alive) setConfig(cfg);
+      })
+      .catch(() => {
+        if (alive) {
+          setConfig({
+            apiBase: 'https://google.yzz.me',
+            apiKey: '',
+            deviceId: 'm-fallback',
+            acceptOrders: false,
+            aiBaseUrl: '',
+            aiModel: 'gpt-4o-mini',
+          });
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // release 包字体偶发永不回调，超时后继续进主界面
+  useEffect(() => {
+    const timer = setTimeout(() => setFontWaitTimedOut(true), 2500);
+    return () => clearTimeout(timer);
   }, []);
 
   const updateConfig = async (next: AppConfig) => {
@@ -53,11 +79,12 @@ export default function App() {
     setConfig(next);
   };
 
-  if (!fontsLoaded || !config) {
+  const fontsReady = fontsLoaded || !!fontError || fontWaitTimedOut;
+  if (!fontsReady || !config) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg }}>
         <ActivityIndicator color={colors.accent} />
-        <Text style={{ color: colors.textMuted, marginTop: 12, fontFamily: 'System' }}>好线索启动中…</Text>
+        <Text style={{ color: colors.textMuted, marginTop: 12 }}>好线索启动中…</Text>
       </View>
     );
   }
@@ -79,12 +106,12 @@ export default function App() {
             tabBarActiveTintColor: colors.accent,
             tabBarInactiveTintColor: colors.textDim,
             tabBarLabelStyle: {
-              fontFamily: 'DMSans_500Medium',
+              fontFamily: fontsLoaded ? 'DMSans_500Medium' : undefined,
               fontSize: 11,
             },
           }}
         >
-          <Tab.Screen name="Dial" options={{ title: '接单', tabBarIcon: ({ color }) => <TabGlyph label="☎" color={color} /> }}>
+          <Tab.Screen name="Dial" options={{ title: '接单', tabBarIcon: ({ color }) => <TabGlyph label="☎" color={color} fontsLoaded={fontsLoaded} /> }}>
             {() => (
               <DialScreen
                 config={config}
@@ -92,13 +119,13 @@ export default function App() {
               />
             )}
           </Tab.Screen>
-          <Tab.Screen name="Tasks" options={{ title: '任务', tabBarIcon: ({ color }) => <TabGlyph label="任" color={color} /> }}>
+          <Tab.Screen name="Tasks" options={{ title: '任务', tabBarIcon: ({ color }) => <TabGlyph label="任" color={color} fontsLoaded={fontsLoaded} /> }}>
             {() => <TasksScreen config={config} />}
           </Tab.Screen>
-          <Tab.Screen name="Companies" options={{ title: '企业', tabBarIcon: ({ color }) => <TabGlyph label="企" color={color} /> }}>
+          <Tab.Screen name="Companies" options={{ title: '企业', tabBarIcon: ({ color }) => <TabGlyph label="企" color={color} fontsLoaded={fontsLoaded} /> }}>
             {() => <CompaniesScreen config={config} />}
           </Tab.Screen>
-          <Tab.Screen name="Settings" options={{ title: '设置', tabBarIcon: ({ color }) => <TabGlyph label="设" color={color} /> }}>
+          <Tab.Screen name="Settings" options={{ title: '设置', tabBarIcon: ({ color }) => <TabGlyph label="设" color={color} fontsLoaded={fontsLoaded} /> }}>
             {() => <SettingsScreen config={config} onSave={updateConfig} />}
           </Tab.Screen>
         </Tab.Navigator>
@@ -107,8 +134,26 @@ export default function App() {
   );
 }
 
-function TabGlyph({ label, color }: { label: string; color: string }) {
+function TabGlyph({
+  label,
+  color,
+  fontsLoaded,
+}: {
+  label: string;
+  color: string;
+  fontsLoaded: boolean;
+}) {
   return (
-    <Text style={{ color, fontSize: 16, fontFamily: 'DMSans_700Bold', marginTop: 2 }}>{label}</Text>
+    <Text
+      style={{
+        color,
+        fontSize: 16,
+        fontFamily: fontsLoaded ? 'DMSans_700Bold' : undefined,
+        fontWeight: fontsLoaded ? undefined : '700',
+        marginTop: 2,
+      }}
+    >
+      {label}
+    </Text>
   );
 }
