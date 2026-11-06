@@ -140,7 +140,7 @@ jobs:
           if "abiFilters" not in g:
               g, n = re.subn(
                   r"(defaultConfig\s*\{)",
-                  r"\1\n        ndk {\n            abiFilters \"arm64-v8a\"\n        }",
+                  r'\1\n        ndk {\n            abiFilters "arm64-v8a"\n        }',
                   g,
                   count=1,
               )
