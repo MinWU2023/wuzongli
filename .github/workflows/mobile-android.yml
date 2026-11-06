@@ -1,7 +1,8 @@
 name: Mobile Android APK
 
-# 不使用 Expo EAS 云端，不需要 EXPO_TOKEN。
-# Runner 上: expo prebuild → Gradle 打 APK → 上传到 Actions Artifacts。
+# 不使用 Expo EAS。Runner 上 prebuild + Gradle 打 APK。
+# - 普通推送 / 手动：上传到 Actions Artifacts
+# - 打 v* 标签：额外创建/更新 GitHub Release，并把 APK 挂到 Assets
 
 on:
   workflow_dispatch:
@@ -20,9 +21,9 @@ on:
     branches:
       - main
       - master
-    paths:
-      - 'mobile/**'
-      - '.github/workflows/mobile-android.yml'
+
+permissions:
+  contents: write
 
 concurrency:
   group: mobile-android-${{ github.ref }}
@@ -47,6 +48,11 @@ jobs:
           else
             echo "name=release" >> "$GITHUB_OUTPUT"
           fi
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=1.0.0" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -61,7 +67,6 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # GitHub ubuntu runner 自带 Android SDK；勿用会安装已废弃 tools 包的 setup-android
       - name: Setup Android SDK
         shell: bash
         run: |
@@ -94,11 +99,11 @@ jobs:
       - name: Prebuild native Android project
         run: npx expo prebuild --platform android --non-interactive
 
-      # 内测直接打 debug 包，避免 release 签名配置在不同 Expo 模板下不一致
       - name: Gradle assemble
         working-directory: mobile/android
         run: |
           chmod +x gradlew
+          # release 无正式签名时回退 debug，保证能产出可安装 APK
           if [ "${{ steps.variant.outputs.name }}" = "release" ]; then
             ./gradlew assembleRelease --no-daemon || ./gradlew assembleDebug --no-daemon
           else
@@ -110,19 +115,36 @@ jobs:
         shell: bash
         run: |
           VARIANT="${{ steps.variant.outputs.name }}"
+          VERSION="${{ steps.variant.outputs.version }}"
           APK=$(find android/app/build/outputs/apk -type f -name "*.apk" ! -name "*.apk.idsig" | head -n 1)
           if [ -z "$APK" ]; then
             echo "APK not found"
             find android/app/build/outputs -type f -name "*.apk" || true
             exit 1
           fi
+          OUT="haoxiansuo-${VERSION}-${VARIANT}.apk"
+          cp "$APK" "$OUT"
           echo "found=$APK"
-          cp "$APK" "haoxiansuo-1.0.0-${VARIANT}.apk"
-          echo "path=haoxiansuo-1.0.0-${VARIANT}.apk" >> "$GITHUB_OUTPUT"
+          echo "file=$OUT" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: haoxiansuo-apk-${{ steps.variant.outputs.name }}
-          path: mobile/haoxiansuo-1.0.0-${{ steps.variant.outputs.name }}.apk
+          name: haoxiansuo-apk-${{ steps.variant.outputs.version }}-${{ steps.variant.outputs.name }}
+          path: mobile/${{ steps.apk.outputs.file }}
           if-no-files-found: error
+
+      - name: Attach APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: 好线索 ${{ github.ref_name }}
+          body: |
+            好线索 ${{ github.ref_name }}
+
+            下载下方 APK 安装。若只有源码压缩包，说明构建未成功，请到 Actions 查看日志。
+          files: mobile/${{ steps.apk.outputs.file }}
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
