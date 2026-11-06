@@ -99,13 +99,61 @@ jobs:
       - name: Prebuild native Android project
         run: npx expo prebuild --platform android --non-interactive
 
+      # release 用 debug 签名即可内测安装；禁止回退 assembleDebug（debug 不含 JS bundle，手机必红屏）
+      - name: Ensure release signing works
+        if: steps.variant.outputs.name == 'release'
+        working-directory: mobile/android/app
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          path = Path("build.gradle")
+          text = path.read_text(encoding="utf-8")
+          # Expo 模板常见：release 未配置签名会失败；强制指向 debug 签名
+          if "signingConfigs.release" not in text and "storeFile" not in text.split("release {", 1)[-1][:400]:
+              pass
+          # 无论模板如何，保证 release buildType 使用 debug 签名配置
+          import re
+          text2, n = re.subn(
+              r"(buildTypes\s*\{[\s\S]*?release\s*\{[\s\S]*?)signingConfig\s+[^\n]+",
+              r"\1signingConfig signingConfigs.debug",
+              text,
+              count=1,
+          )
+          if n == 0:
+              text2, n = re.subn(
+                  r"(buildTypes\s*\{[\s\S]*?release\s*\{)",
+                  r"\1\n            signingConfig signingConfigs.debug",
+                  text,
+                  count=1,
+              )
+          if n == 0:
+              raise SystemExit("cannot patch release signingConfig in app/build.gradle")
+          path.write_text(text2, encoding="utf-8")
+          print("release signingConfig -> debug")
+          PY
+
+      - name: Bundle JS into Android assets
+        if: steps.variant.outputs.name == 'release'
+        run: |
+          mkdir -p android/app/src/main/assets
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --minify true \
+            --entry-file node_modules/expo/AppEntry.js \
+            --bundle-output android/app/src/main/assets/index.android.bundle \
+            --assets-dest android/app/src/main/res
+          test -s android/app/src/main/assets/index.android.bundle
+
       - name: Gradle assemble
         working-directory: mobile/android
+        env:
+          NODE_ENV: production
         run: |
           chmod +x gradlew
-          # release 无正式签名时回退 debug，保证能产出可安装 APK
           if [ "${{ steps.variant.outputs.name }}" = "release" ]; then
-            ./gradlew assembleRelease --no-daemon || ./gradlew assembleDebug --no-daemon
+            ./gradlew assembleRelease --no-daemon
           else
             ./gradlew assembleDebug --no-daemon
           fi
@@ -116,11 +164,22 @@ jobs:
         run: |
           VARIANT="${{ steps.variant.outputs.name }}"
           VERSION="${{ steps.variant.outputs.version }}"
-          APK=$(find android/app/build/outputs/apk -type f -name "*.apk" ! -name "*.apk.idsig" | head -n 1)
+          if [ "$VARIANT" = "release" ]; then
+            APK=$(find android/app/build/outputs/apk/release -type f -name "*.apk" ! -name "*-unsigned.apk" ! -name "*.apk.idsig" | head -n 1)
+          else
+            APK=$(find android/app/build/outputs/apk/debug -type f -name "*.apk" ! -name "*.apk.idsig" | head -n 1)
+          fi
           if [ -z "$APK" ]; then
-            echo "APK not found"
+            echo "APK not found for variant=$VARIANT"
             find android/app/build/outputs -type f -name "*.apk" || true
             exit 1
+          fi
+          # 二次确认：release 包里应带有 index.android.bundle
+          if [ "$VARIANT" = "release" ]; then
+            unzip -l "$APK" | grep -E 'index\.android\.bundle|assets/index' || {
+              echo "Release APK missing JS bundle — refusing to publish"
+              exit 1
+            }
           fi
           OUT="haoxiansuo-${VERSION}-${VARIANT}.apk"
           cp "$APK" "$OUT"

@@ -1,5 +1,10 @@
 # APK 打包说明（GitHub Actions，无 Expo EAS）
 
+## 红屏「Unable to load script」
+
+说明装到的是 **debug 包**（要连电脑 Metro）。正式内测必须装 **release** APK（内含 `index.android.bundle`）。  
+请重新打 tag / 等 Actions 成功后，只下载带 `-release.apk` 的文件。
+
 ## APK 在哪里看
 
 | 入口 | 有没有 APK |
