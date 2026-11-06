@@ -266,7 +266,7 @@ async function fetchSerper(message) {
     }
     const endpoint = String(message.endpoint || 'https://google.serper.dev/search').trim() || 'https://google.serper.dev/search';
     assertHttpUrl(endpoint);
-    const page = Math.max(1, Math.min(10, Number(message.page || 1)));
+    const page = Math.max(1, Math.min(30, Number(message.page || 1)));
     const gl = String(message.gl || 'us').trim().toLowerCase() || 'us';
     const hl = String(message.hl || 'en').trim().toLowerCase() || 'en';
 

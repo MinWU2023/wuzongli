@@ -23,15 +23,16 @@ function normalizeBase(base: string): string {
   return String(base || '').trim().replace(/\/+$/, '');
 }
 
+// React Native 的 URL / URLSearchParams 实现不完整，这里手工拼接查询串
 function buildUrl(base: string, path: string, query?: RequestOptions['query']): string {
-  const url = new URL(normalizeBase(base) + path);
+  const pairs: string[] = [];
   if (query) {
     Object.entries(query).forEach(([key, value]) => {
       if (value === undefined || value === null || value === '') return;
-      url.searchParams.set(key, String(value));
+      pairs.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(value)));
     });
   }
-  return url.toString();
+  return normalizeBase(base) + path + (pairs.length ? '?' + pairs.join('&') : '');
 }
 
 export async function apiRequest<T = unknown>(

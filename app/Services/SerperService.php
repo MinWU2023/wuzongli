@@ -141,7 +141,7 @@ final class SerperService
         ?int $accountId,
         ?string $accountName
     ): array {
-        $page = max(1, min(10, $page));
+        $page = max(1, min(PipelineService::AUTO_PAGE_CAP, $page));
         if (!filter_var($endpoint, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $endpoint)) {
             throw new HttpException(503, 'Serper 接口地址配置不正确。', 'serper_not_configured');
         }

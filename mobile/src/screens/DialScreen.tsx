@@ -18,6 +18,12 @@ export function DialScreen({ config, onAcceptChange }: Props) {
   const [lastError, setLastError] = useState('');
   const polling = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 轮询回调里读最新的当前号码，避免把 current 放进 effect 依赖导致反复重启轮询
+  const currentRef = useRef<DialJob | null>(null);
+  const setCurrentJob = useCallback((job: DialJob | null) => {
+    currentRef.current = job;
+    setCurrent(job);
+  }, []);
 
   const refreshStats = useCallback(async () => {
     if (!config.apiKey) return;
@@ -31,16 +37,16 @@ export function DialScreen({ config, onAcceptChange }: Props) {
 
   const openDialer = async (phone: string) => {
     const cleaned = phone.replace(/[^\d+]/g, '');
-    const url = `tel:${cleaned}`;
-    const can = await Linking.canOpenURL(url);
-    if (!can) {
+    // Android 11+ 上 canOpenURL 对 tel: 可能误判为 false，直接打开并捕获异常
+    try {
+      await Linking.openURL(`tel:${cleaned}`);
+    } catch {
       throw new Error('当前设备无法打开拨号盘');
     }
-    await Linking.openURL(url);
   };
 
   const claimAndDial = useCallback(async () => {
-    if (polling.current || busy) return;
+    if (polling.current || currentRef.current) return;
     if (!config.apiKey) {
       setStatusText('请先到设置填写 API Key');
       return;
@@ -53,10 +59,10 @@ export function DialScreen({ config, onAcceptChange }: Props) {
       setPending(Number(data.pending_count || 0));
       if (!data.job) {
         setStatusText('暂无待拨号码，继续监听…');
-        setCurrent(null);
+        setCurrentJob(null);
         return;
       }
-      setCurrent(data.job);
+      setCurrentJob(data.job);
       setStatusText('已领取，正在唤起拨号…');
       await openDialer(data.job.phone);
       setStatusText('拨号盘已打开，请完成通话后标记结果');
@@ -68,7 +74,7 @@ export function DialScreen({ config, onAcceptChange }: Props) {
       polling.current = false;
       setBusy(false);
     }
-  }, [busy, config.apiBase, config.apiKey, config.deviceId]);
+  }, [config.apiBase, config.apiKey, config.deviceId, setCurrentJob]);
 
   useEffect(() => {
     refreshStats();
@@ -86,20 +92,23 @@ export function DialScreen({ config, onAcceptChange }: Props) {
     setStatusText('接单中 · 每 10 秒轮询');
     claimAndDial();
     timerRef.current = setInterval(() => {
-      if (!current) claimAndDial();
+      if (!currentRef.current) claimAndDial();
       else refreshStats();
     }, 10000);
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
-  }, [config.acceptOrders, claimAndDial, current, refreshStats]);
+  }, [config.acceptOrders, claimAndDial, refreshStats]);
 
   const mark = async (status: 'done' | 'failed' | 'cancelled') => {
     if (!current) return;
     setBusy(true);
     try {
       await completeDial(config.apiBase, config.apiKey, current.id, status);
-      setCurrent(null);
+      setCurrentJob(null);
       setStatusText(status === 'done' ? '已完成，继续等待下一单' : '已标记，继续等待下一单');
       await refreshStats();
     } catch (error) {

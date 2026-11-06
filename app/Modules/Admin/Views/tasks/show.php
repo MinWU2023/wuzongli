@@ -11,7 +11,7 @@ $currentIndex = $stages[$task['stage']]['index'] ?? 0;
 $isDone = $task['stage'] === 'done';
 $countCards = [
     ['label' => '关键词', 'value' => $counts['keywords_total'], 'sub' => $counts['keywords_done'] . ' 个已完成'],
-    ['label' => '搜索页', 'value' => $counts['serp_pages_done'] . ' / ' . $counts['serp_pages_target'], 'sub' => $counts['serp_pages_target'] - $counts['serp_pages_done'] . ' 页待处理', 'raw' => true],
+    ['label' => '搜索页', 'value' => ((int) $task['pages_target'] === 0) ? (string) $counts['serp_pages_done'] : $counts['serp_pages_done'] . ' / ' . $counts['serp_pages_target'], 'sub' => ((int) $task['pages_target'] === 0) ? $counts['keywords_done'] . ' / ' . $counts['keywords_total'] . ' 个关键词已搜完' : $counts['serp_pages_target'] - $counts['serp_pages_done'] . ' 页待处理', 'raw' => true],
     ['label' => '去重域名', 'value' => $counts['websites_total'], 'sub' => $counts['websites_approved'] . ' 个通过 AI 筛选'],
     ['label' => '已识别官网', 'value' => $counts['pages_done'], 'sub' => $counts['page_errors'] . ' 个异常'],
     ['label' => '企业线索', 'value' => $counts['companies'], 'sub' => $counts['extract_errors'] . ' 个提取异常'],
@@ -34,7 +34,7 @@ $countCards = [
                     <span class="task-date">创建于 <?= e(format_dt((string) $task['created_at'])) ?></span>
                 </div>
                 <h2><?= e($task['city']) ?> <small>外贸独立站线索任务</small></h2>
-                <p>目标市场：<?= e($task['target_market']) ?> · 关键词 <?= (int) $task['keyword_count'] ?> 个 · 每个关键词 <?= (int) $task['pages_target'] ?> 页 Google 结果</p>
+                <p>目标市场：<?= e($task['target_market']) ?> · 关键词 <?= (int) $task['keyword_count'] ?> 个 · <?= (int) $task['pages_target'] > 0 ? '每个关键词 ' . (int) $task['pages_target'] . ' 页' : '每个关键词自动翻页至无结果' ?> Google 结果 · <?= $task['category_label'] !== '' ? '产品分类：' . e($task['category_label']) : '未选分类（仅按城市生成）' ?></p>
             </div>
         </div>
         <div class="task-detail-actions">
@@ -242,6 +242,9 @@ $countCards = [
                                     data-address="<?= e($company['address'] ?? '') ?>"
                                     data-source-url="<?= e($company['source_url'] ?? '') ?>"
                                 ><?= e($company['phone']) ?></button>
+                                <?php if (!empty($company['phone_type'])): ?>
+                                    <span class="badge neutral"><?= e(\App\Services\PhoneService::TYPE_LABELS[$company['phone_type']] ?? $company['phone_type']) ?></span>
+                                <?php endif; ?>
                             <?php endif; ?>
                             <?php if (!empty($company['phone_alt'])): ?>
                                 <button type="button"

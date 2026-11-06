@@ -14,6 +14,7 @@ use App\Core\Router;
 // API v1 (called by the Chrome extension; X-API-Key required except health)
 // ---------------------------------------------------------------------------
 $router->get('/api/health', 'Api/Health@index');
+$router->get('/api/categories', 'Api/Task@categories');
 $router->get('/api/settings', 'Api/Task@settings');
 $router->post('/api/settings', 'Api/Task@updateSettings');
 
@@ -32,6 +33,7 @@ $router->post('/api/tasks/{id}/keywords/generate', 'Api/Task@generateKeywords');
 $router->post('/api/tasks/{id}/serp', 'Api/Task@serp');
 $router->post('/api/tasks/{id}/serp/serper', 'Api/Task@serper');
 $router->post('/api/tasks/{id}/classify', 'Api/Task@classify');
+$router->post('/api/tasks/{id}/phones/normalize', 'Api/Task@normalizePhones');
 $router->post('/api/tasks/{id}/websites/{websiteId}/pages', 'Api/Task@pages');
 $router->post('/api/tasks/{id}/websites/{websiteId}/extract', 'Api/Task@extract');
 $router->post('/api/tasks/{id}/pause', 'Api/Task@pause');
@@ -69,6 +71,17 @@ $router->post('/admin/relays', 'Admin/Relays@store');
 $router->get('/admin/relays/{id}/edit', 'Admin/Relays@edit');
 $router->post('/admin/relays/{id}', 'Admin/Relays@update');
 $router->post('/admin/relays/{id}/delete', 'Admin/Relays@delete');
+
+$router->get('/admin/blocklist', 'Admin/Blocklist@index');
+$router->post('/admin/blocklist', 'Admin/Blocklist@store');
+$router->post('/admin/blocklist/{id}/delete', 'Admin/Blocklist@delete');
+
+$router->get('/admin/categories', 'Admin/Categories@index');
+$router->post('/admin/categories/groups', 'Admin/Categories@saveGroup');
+$router->post('/admin/categories/groups/{id}/delete', 'Admin/Categories@deleteGroup');
+$router->post('/admin/categories/items', 'Admin/Categories@saveItem');
+$router->post('/admin/categories/items/bulk', 'Admin/Categories@bulkItems');
+$router->post('/admin/categories/items/{id}/delete', 'Admin/Categories@deleteItem');
 
 $router->get('/admin/prompts', 'Admin/Prompts@index');
 $router->get('/admin/prompts/{id}/edit', 'Admin/Prompts@edit');

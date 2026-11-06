@@ -54,7 +54,7 @@
             <?= csrf_field() ?>
             <div class="form-grid">
                 <label class="field span-2"><span>每个任务关键词数</span><input type="number" name="keyword_count" value="<?= (int) $settings['keyword_count'] ?>" min="6" max="60"><small>6–60，AI 实际产出会受模型影响</small></label>
-                <label class="field span-2"><span>每个关键词搜索页数</span><input type="number" name="serp_pages" value="<?= (int) $settings['serp_pages'] ?>" min="1" max="10"><small>1–10 页，每页 10 条 Google 结果</small></label>
+                <label class="field span-2"><span>每个关键词搜索页数</span><input type="number" name="serp_pages" value="<?= (int) $settings['serp_pages'] ?>" min="0" max="30"><small>0 = 自动翻页（搜到没有结果为止，最多 30 页）；也可填 1–30 固定页数</small></label>
                 <label class="field span-2"><span>域名筛选批量</span><input type="number" name="classify_batch" value="<?= (int) $settings['classify_batch'] ?>" min="5" max="50"><small>每批提交给 AI 的域名数量</small></label>
                 <label class="field span-2"><span>失败重试次数</span><input type="number" name="max_attempts" value="<?= (int) $settings['max_attempts'] ?>" min="1" max="10"><small>超过后跳过并记录异常</small></label>
                 <label class="field span-2"><span>Google 域名</span><input name="google_domain" value="<?= e($settings['google_domain']) ?>"><small>浏览器抓取模式使用</small></label>

@@ -14,6 +14,9 @@ use App\Core\Url;
  */
 final class PipelineService
 {
+    /** 自动翻页（pages_target = 0）时每个关键词的页数安全上限，防止无限消耗额度。 */
+    public const AUTO_PAGE_CAP = 30;
+
     public function __construct(
         private readonly TaskService $tasks,
         private readonly AiService $ai,
@@ -75,6 +78,7 @@ final class PipelineService
                     'keyword' => (string) $keyword['keyword'],
                     'page' => $page,
                     'pages_target' => (int) $keyword['pages_target'],
+                    'auto_pages' => (int) $task['pages_target'] === 0,
                     'google_url' => Url::googleSearch(
                         (string) $keyword['keyword'],
                         $page,
@@ -138,9 +142,9 @@ final class PipelineService
                     ->first();
                 if ($website === null) {
                     $counts = $this->tasks->counts($taskId);
-                    $this->tasks->setStage($taskId, 'done', '全部流程完成，共提取 ' . $counts['companies'] . ' 家企业');
+                    $this->tasks->setStage($taskId, 'phone', '联系方式提取完成，共 ' . $counts['companies'] . ' 家企业，进入电话标准化');
                     $task = $this->tasks->find($taskId);
-                    return $this->result($task, 'done', null, '全部流程已完成。');
+                    continue;
                 }
                 $pages = $this->websitePages($website);
                 return $this->result($task, 'extract_contacts', [
@@ -149,6 +153,18 @@ final class PipelineService
                     'pages' => $pages,
                     'delay_ms' => max(500, $delay),
                 ], '请抓取关键页面并提取企业联系方式。');
+            }
+
+            if ($stage === 'phone') {
+                if ($counts['pending_phone'] === 0) {
+                    $this->tasks->setStage($taskId, 'done', '电话标准化完成，全部流程完成，共 ' . $counts['companies'] . ' 家企业');
+                    $task = $this->tasks->find($taskId);
+                    return $this->result($task, 'done', null, '全部流程已完成。');
+                }
+                return $this->result($task, 'normalize_phones', [
+                    'batch_size' => max(5, min(40, Settings::int('phone_batch', 15))),
+                    'pending_count' => $counts['pending_phone'],
+                ], '请调用 AI 把抓取到的电话整理成可直接拨打的格式。');
             }
 
             $this->tasks->setStage($taskId, 'done', '流程结束');
@@ -192,8 +208,12 @@ final class PipelineService
                 $message = '官网关键页面识别完成，进入联系方式提取';
             } elseif ($stage === 'extract') {
                 $complete = $counts['pending_extract'] === 0;
+                $next = 'phone';
+                $message = '联系方式提取完成，进入电话标准化';
+            } elseif ($stage === 'phone') {
+                $complete = $counts['pending_phone'] === 0;
                 $next = 'done';
-                $message = '全部流程完成，共提取 ' . $counts['companies'] . ' 家企业';
+                $message = '电话标准化完成，全部流程完成，共 ' . $counts['companies'] . ' 家企业';
             }
 
             if (!$complete || $next === null) {
@@ -250,7 +270,7 @@ final class PipelineService
                         'intent' => $keyword['intent'],
                         'language' => $keyword['language'],
                         'status' => 'pending',
-                        'pages_target' => (int) $task['pages_target'],
+                        'pages_target' => (int) $task['pages_target'] > 0 ? (int) $task['pages_target'] : self::AUTO_PAGE_CAP,
                         'pages_done' => 0,
                         'attempts' => 0,
                         'results_count' => 0,
@@ -308,6 +328,43 @@ final class PipelineService
 
         $clean = $this->sanitizeResults($results);
         $attempts = (int) $keyword['attempts'];
+
+        // 翻到没有结果的页：说明该关键词已经搜完，不算失败，直接收尾。
+        if ($clean === [] && $page > 1 && !$blocked && ($error === null || $error === '')) {
+            $lastPage = $page - 1;
+            $resultCount = (int) (Db::instance()->value(
+                'SELECT COUNT(*) FROM `' . Db::instance()->tableName('search_results') . '` WHERE `keyword_id` = ?',
+                [$keywordId]
+            ) ?? 0);
+            Db::instance()->update('keywords', [
+                'pages_target' => $lastPage,
+                'pages_done' => $lastPage,
+                'status' => 'done',
+                'attempts' => 0,
+                'results_count' => $resultCount,
+                'last_error' => null,
+                'updated_at' => now(),
+            ], ['id' => $keywordId]);
+            $this->tasks->setError($taskId, null);
+            $this->tasks->log($taskId, 'serp', 'info', sprintf(
+                '关键词「%s」第 %d 页没有更多结果，已搜完 %d 页',
+                $keyword['keyword'],
+                $page,
+                $lastPage
+            ), ['keyword_id' => $keywordId, 'page' => $page, 'last_page' => $lastPage, 'provider' => $source]);
+            $counts = $this->tasks->counts($taskId);
+            $this->tasks->refresh($this->tasks->find($taskId), $counts);
+            return [
+                'stored' => 0,
+                'new_domains' => 0,
+                'parsed' => 0,
+                'page' => $page,
+                'keyword_done' => true,
+                'end_of_results' => true,
+                'attempts' => 0,
+                'counts' => $counts,
+            ];
+        }
         if ($clean === [] && ($error !== null || $blocked)) {
             return $this->serpFailure($task, $keyword, $page, $attempts, $blocked
                 ? 'Google 返回验证页或空结果，可能触发人机验证'
@@ -320,6 +377,13 @@ final class PipelineService
             return $this->serpFailure($task, $keyword, $page, $attempts, $message);
         }
 
+        // 对比禁止采集名单：命中的域名不入库。
+        $parsedTotal = count($clean);
+        $blockedCount = 0;
+        $clean = BlocklistService::filter($clean, $blockedCount);
+        // 已抓取到的合格独立站域名（所有任务、无论有无联系方式）不再重复入库。
+        $knownCount = 0;
+        $clean = $this->filterKnownQualified($clean, $knownCount);
         $stored = 0;
         $newDomains = 0;
         Db::instance()->transaction(function (Db $db) use ($taskId, $keywordId, $keyword, $page, $clean, &$stored, &$newDomains): void {
@@ -385,12 +449,15 @@ final class PipelineService
 
         $this->tasks->setError($taskId, null);
         $this->tasks->log($taskId, 'serp', 'success', sprintf(
-            '%s 第 %d 页采集完成：解析 %d 条，域名去重后新增 %d 个',
+            '%s 第 %d 页采集完成：解析 %d 条，域名去重后新增 %d 个%s',
             $source === 'serper' ? 'Serper' : 'Google',
             $page,
             $stored,
-            $newDomains
+            $newDomains,
+            ($blockedCount > 0 ? '，禁止名单拦截 ' . $blockedCount . ' 条' : '') . ($knownCount > 0 ? '，已采集过的合格域名跳过 ' . $knownCount . ' 条' : '')
         ), [
+            'blocked' => $blockedCount,
+            'known_skipped' => $knownCount,
             'keyword_id' => $keywordId,
             'page' => $page,
             'stored' => $stored,
@@ -403,7 +470,9 @@ final class PipelineService
         return [
             'stored' => $stored,
             'new_domains' => $newDomains,
-            'parsed' => count($clean),
+            'parsed' => $parsedTotal,
+            'blocked' => $blockedCount,
+            'known_skipped' => $knownCount,
             'page' => $page,
             'keyword_done' => $status === 'done',
             'attempts' => 0,
@@ -530,6 +599,54 @@ final class PipelineService
     }
 
     /**
+     * 过滤掉已被 AI 判定为合格独立站（classify_status = approved）的域名。
+     * 跨所有任务生效，不区分是否已提取到联系方式，避免重复采集和重复调用 AI。
+     *
+     * @param array<int, array<string, mixed>> $rows 每行含 domain 字段
+     * @return array<int, array<string, mixed>>
+     */
+    private function filterKnownQualified(array $rows, int &$skipped = 0): array
+    {
+        $skipped = 0;
+        $domains = [];
+        foreach ($rows as $row) {
+            $domain = (string) ($row['domain'] ?? '');
+            if ($domain !== '') {
+                $domains[$domain] = true;
+            }
+        }
+        if ($domains === []) {
+            return $rows;
+        }
+        $list = array_slice(array_keys($domains), 0, 500);
+        try {
+            $db = Db::instance();
+            $found = $db->fetchAll(
+                'SELECT DISTINCT `domain` FROM `' . $db->tableName('websites') . '` WHERE `classify_status` = \'approved\' AND `domain` IN (' . implode(',', array_fill(0, count($list), '?')) . ')',
+                $list
+            );
+        } catch (\Throwable) {
+            return $rows;
+        }
+        if ($found === []) {
+            return $rows;
+        }
+        $known = [];
+        foreach ($found as $item) {
+            $known[strtolower((string) $item['domain'])] = true;
+        }
+        $kept = [];
+        foreach ($rows as $row) {
+            if (isset($known[strtolower((string) ($row['domain'] ?? ''))])) {
+                $skipped++;
+                continue;
+            }
+            $kept[] = $row;
+        }
+        return $kept;
+    }
+
+    /**
      * @param array<int, array{title?:string,url?:string,snippet?:string,position?:int}> $results
      * @return array<int, array{title:string,url:string,domain:string,snippet:string,position:int}>
      */
@@ -590,13 +707,27 @@ final class PipelineService
 
             $aiList = [];
             $prefiltered = 0;
+            $blockedAdded = 0;
             foreach ($websites as $website) {
-                if (Url::isPlatform((string) $website['domain']) || Url::isSocial((string) $website['domain'])) {
+                $siteDomain = (string) $website['domain'];
+                if (Url::isPlatform($siteDomain) || Url::isSocial($siteDomain)) {
                     Db::instance()->update('websites', [
                         'classify_status' => 'rejected',
                         'is_chinese_enterprise' => 0,
                         'ai_confidence' => 0,
                         'ai_reason' => '平台、搜索引擎、目录或社交媒体，非企业独立站',
+                        'updated_at' => now(),
+                    ], ['id' => (int) $website['id']]);
+                    if (BlocklistService::add($siteDomain, 'platform', '平台、搜索引擎、目录或社交媒体，非企业独立站', 'rule', $taskId, null)) {
+                        $blockedAdded++;
+                    }
+                    $prefiltered++;
+                } elseif (BlocklistService::isBlocked($siteDomain)) {
+                    Db::instance()->update('websites', [
+                        'classify_status' => 'rejected',
+                        'is_chinese_enterprise' => 0,
+                        'ai_confidence' => 0,
+                        'ai_reason' => '已在禁止采集名单中，跳过 AI 判断',
                         'updated_at' => now(),
                     ], ['id' => (int) $website['id']]);
                     $prefiltered++;
@@ -649,18 +780,30 @@ final class PipelineService
                         $approved++;
                     } else {
                         $rejected++;
+                        // AI 判定不合格（B2B/供应商平台、电商平台、非企业站等）：加入禁止采集名单。
+                        if (BlocklistService::add(
+                            (string) $website['domain'],
+                            (string) ($judgement['category'] ?? 'other'),
+                            (string) $judgement['reason'],
+                            'ai',
+                            $taskId,
+                            (float) $judgement['confidence']
+                        )) {
+                            $blockedAdded++;
+                        }
                     }
                 }
             }
 
             $this->tasks->setError($taskId, null);
             $this->tasks->log($taskId, 'classify', 'success', sprintf(
-                'AI 企业筛选：本批 %d 个域名，通过 %d 个，排除 %d 个%s',
+                'AI 企业筛选：本批 %d 个域名，通过 %d 个，排除 %d 个，新增禁止采集名单 %d 个%s',
                 count($websites),
                 $approved,
                 $rejected,
+                $blockedAdded,
                 $errors > 0 ? '，' . $errors . ' 个待重试' : ''
-            ), ['processed' => count($websites), 'approved' => $approved, 'rejected' => $rejected, 'errors' => $errors]);
+            ), ['processed' => count($websites), 'approved' => $approved, 'rejected' => $rejected, 'blocked_added' => $blockedAdded, 'errors' => $errors]);
             $counts = $this->tasks->counts($taskId);
             $this->tasks->refresh($this->tasks->find($taskId), $counts);
 
@@ -668,6 +811,7 @@ final class PipelineService
                 'processed' => count($websites),
                 'approved' => $approved,
                 'rejected' => $rejected,
+                'blocked_added' => $blockedAdded,
                 'errors' => $errors,
                 'pending' => $counts['pending_classify'],
                 'counts' => $counts,
@@ -777,6 +921,141 @@ final class PipelineService
             $counts = $this->tasks->counts($taskId);
             $this->tasks->refresh($this->tasks->find($taskId), $counts);
             return ['company' => $company, 'counts' => $counts];
+        } finally {
+            Db::instance()->releaseLock($lock);
+        }
+    }
+
+    /**
+     * 电话标准化：把抓取到的原始电话交给 AI 逐家企业整理成可直接拨打的 E.164 格式，
+     * 判断手机/座机，并把结果写回 companies（phone 为主号码，phone_alt 为其余号码）。
+     * AI 多次失败时用规则兜底，不会卡住流程。
+     *
+     * @return array<string, mixed>
+     */
+    public function normalizePhonesBatch(int $taskId): array
+    {
+        $task = $this->tasks->find($taskId);
+        $this->assertRunnable($task);
+        if (!PhoneService::ready()) {
+            throw new HttpException(409, '数据库缺少电话标准化字段，请先执行数据库迁移（migrate.php）。', 'phone_migration_missing');
+        }
+        $lock = $this->lock($taskId, 'phone');
+        try {
+            $db = Db::instance();
+            $batchSize = max(5, min(40, Settings::int('phone_batch', 15)));
+            $rows = $db->table('companies')->where('task_id', $taskId)->where('phone_status', 'pending')->orderBy('id')->limit($batchSize)->get();
+            if ($rows === []) {
+                return ['processed' => 0, 'normalized' => 0, 'skipped' => 0, 'retry' => 0, 'fallback' => 0, 'pending' => 0, 'counts' => $this->tasks->counts($taskId)];
+            }
+
+            $now = now();
+            $jobs = [];
+            $payload = [];
+            $skipped = 0;
+            foreach ($rows as $row) {
+                $source = PhoneService::sourceText($row);
+                if ($source === '') {
+                    $db->update('companies', [
+                        'phone_status' => 'skipped',
+                        'phone_note' => '没有电话号码',
+                        'phone_normalized_at' => $now,
+                        'updated_at' => $now,
+                    ], ['id' => (int) $row['id']]);
+                    $skipped++;
+                    continue;
+                }
+                $jobs[] = ['row' => $row, 'source' => $source];
+                $payload[] = [
+                    'n' => count($jobs),
+                    'company' => Str::limit((string) ($row['company_name'] ?? ''), 80),
+                    'domain' => (string) ($row['domain'] ?? ''),
+                    'address' => Str::limit((string) ($row['address'] ?? ''), 120),
+                    'phones_raw' => Str::limit($source, 400),
+                    'whatsapp' => (string) ($row['whatsapp'] ?? ''),
+                ];
+            }
+
+            $aiRows = [];
+            $aiError = null;
+            if ($jobs !== []) {
+                try {
+                    $aiRows = $this->ai->normalizePhones($task, $payload);
+                } catch (\Throwable $e) {
+                    $aiError = $e;
+                }
+                $db->ensureConnected();
+            }
+
+            $normalized = 0;
+            $retry = 0;
+            $fallback = 0;
+            foreach ($jobs as $index => $job) {
+                $row = $job['row'];
+                $aiItem = $aiError === null ? ($aiRows[$index + 1] ?? null) : null;
+                $attempts = (int) ($row['phone_attempts'] ?? 0);
+                if ($aiItem === null && $attempts + 1 < $this->maxAttempts()) {
+                    $db->update('companies', [
+                        'phone_attempts' => $attempts + 1,
+                        'phone_note' => Str::limit('AI 未返回结果，待重试：' . ($aiError?->getMessage() ?? '结果缺失'), 250, ''),
+                        'updated_at' => $now,
+                    ], ['id' => (int) $row['id']]);
+                    $retry++;
+                    continue;
+                }
+
+                $usedFallback = $aiItem === null;
+                $numbers = PhoneService::finalize($aiItem['numbers'] ?? [], $job['source']);
+                $pick = PhoneService::pick($numbers);
+                $data = [
+                    'phone_raw' => Str::limit($job['source'], 990, ''),
+                    'phone_list_json' => json_encode($numbers, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    'phone_status' => 'done',
+                    'phone_attempts' => 0,
+                    'phone_normalized_at' => $now,
+                    'updated_at' => $now,
+                ];
+                if ($pick['primary'] !== null) {
+                    $data['phone'] = $pick['primary']['dial'];
+                    $data['phone_alt'] = $pick['alts'] === [] ? null : Str::limit(implode(', ', $pick['alts']), 490, '');
+                    $data['phone_type'] = $pick['primary']['type'];
+                    $data['phone_country'] = $pick['primary']['cc'];
+                    $data['phone_note'] = $usedFallback ? 'AI 不可用，已按规则整理' : null;
+                    $normalized++;
+                    if ($usedFallback) {
+                        $fallback++;
+                    }
+                } else {
+                    $data['phone_type'] = 'unknown';
+                    $data['phone_country'] = null;
+                    $data['phone_note'] = '未识别出有效可拨号码，保留原始数据';
+                }
+                $db->update('companies', $data, ['id' => (int) $row['id']]);
+            }
+
+            $this->tasks->log($taskId, 'phone', $retry > 0 && $normalized === 0 ? 'warning' : 'success', sprintf(
+                '电话标准化：本批 %d 家，已整理 %d 家，无电话跳过 %d 家%s%s',
+                count($rows),
+                $normalized,
+                $skipped,
+                $fallback > 0 ? '，规则兜底 ' . $fallback . ' 家' : '',
+                $retry > 0 ? '，待重试 ' . $retry . ' 家' : ''
+            ), ['normalized' => $normalized, 'skipped' => $skipped, 'retry' => $retry, 'fallback' => $fallback]);
+
+            $counts = $this->tasks->counts($taskId);
+            $this->tasks->refresh($this->tasks->find($taskId), $counts);
+            if ($aiError !== null && $normalized === 0 && $retry > 0) {
+                throw $aiError instanceof HttpException ? $aiError : new HttpException(502, 'AI 电话标准化失败：' . $aiError->getMessage(), 'phone_normalization_failed');
+            }
+            return [
+                'processed' => count($rows),
+                'normalized' => $normalized,
+                'skipped' => $skipped,
+                'retry' => $retry,
+                'fallback' => $fallback,
+                'pending' => $counts['pending_phone'],
+                'counts' => $counts,
+            ];
         } finally {
             Db::instance()->releaseLock($lock);
         }
@@ -906,6 +1185,8 @@ final class PipelineService
             $stage = 'discover';
         } elseif ($counts['pending_extract'] > 0) {
             $stage = 'extract';
+        } elseif ($counts['pending_phone'] > 0) {
+            $stage = 'phone';
         } elseif ((string) $task['stage'] === 'done') {
             $stage = 'done';
         }
@@ -930,7 +1211,7 @@ final class PipelineService
      */
     public function rewind(int $taskId, string $targetStage, array $options = []): array
     {
-        $allowedStages = ['keywords', 'serp', 'classify', 'discover', 'extract'];
+        $allowedStages = ['keywords', 'serp', 'classify', 'discover', 'extract', 'phone'];
         if (!in_array($targetStage, $allowedStages, true)) {
             throw HttpException::validation('无效的回退阶段：' . $targetStage);
         }
@@ -950,17 +1231,20 @@ final class PipelineService
         $keywordCount = isset($options['keyword_count']) && (int) $options['keyword_count'] > 0
             ? max(6, min(60, (int) $options['keyword_count']))
             : (int) ($task['keyword_count'] ?: 24);
-        $pagesTarget = isset($options['pages_target']) && (int) $options['pages_target'] > 0
-            ? max(1, min(10, (int) $options['pages_target']))
-            : (int) ($task['pages_target'] ?: 3);
+        $pagesTarget = isset($options['pages_target'])
+            ? max(0, min(self::AUTO_PAGE_CAP, (int) $options['pages_target']))
+            : (int) $task['pages_target'];
 
         $taskOptions = is_array($task['options'] ?? null) ? $task['options'] : [];
         $taskOptions['keyword_count'] = $keywordCount;
         $taskOptions['pages_target'] = $pagesTarget;
         $taskOptions['target_market'] = Str::limit($targetMarket, 100, '');
+        if (array_key_exists('categories', $options) && $options['categories'] !== null) {
+            $taskOptions['categories'] = CategoryService::sanitize($options['categories']);
+        }
 
         $kwTable = $db->tableName('keywords');
-        $serpTable = $db->tableName('serp_results');
+        $serpTable = $db->tableName('search_results');
         $webTable = $db->tableName('websites');
         $compTable = $db->tableName('companies');
 
@@ -970,6 +1254,7 @@ final class PipelineService
             'classify' => '03 AI 企业域名筛选',
             'discover' => '04 官网关键页面识别',
             'extract' => '05 企业联系方式提取',
+            'phone' => '06 AI 电话标准化',
         ];
 
         $db->transaction(function (Db $tx) use (
@@ -996,7 +1281,7 @@ final class PipelineService
                 $tx->query("DELETE FROM `{$serpTable}` WHERE `task_id` = ?", [$taskId]);
                 $tx->query(
                     "UPDATE `{$kwTable}` SET `pages_target` = ?, `pages_done` = 0, `results_count` = 0, `attempts` = 0, `error_pages` = 0, `last_error` = NULL, `status` = 'pending', `updated_at` = ? WHERE `task_id` = ?",
-                    [$pagesTarget, $now, $taskId]
+                    [$pagesTarget > 0 ? $pagesTarget : self::AUTO_PAGE_CAP, $now, $taskId]
                 );
             } elseif ($targetStage === 'classify') {
                 $tx->query("DELETE FROM `{$compTable}` WHERE `task_id` = ?", [$taskId]);
@@ -1010,6 +1295,13 @@ final class PipelineService
                     "UPDATE `{$webTable}` SET `home_url` = NULL, `about_url` = NULL, `contact_url` = NULL, `pages_json` = NULL, `page_status` = 'pending', `extract_status` = 'pending', `attempts` = 0, `last_error` = NULL, `updated_at` = ? WHERE `task_id` = ? AND `classify_status` = 'approved'",
                     [$now, $taskId]
                 );
+            } elseif ($targetStage === 'phone') {
+                if (PhoneService::ready()) {
+                    $tx->query(
+                        "UPDATE `{$compTable}` SET `phone_status` = 'pending', `phone_attempts` = 0, `phone_note` = NULL, `updated_at` = ? WHERE `task_id` = ?",
+                        [$now, $taskId]
+                    );
+                }
             } elseif ($targetStage === 'extract') {
                 $tx->query("DELETE FROM `{$compTable}` WHERE `task_id` = ?", [$taskId]);
                 $tx->query(
@@ -1039,6 +1331,7 @@ final class PipelineService
             'target_market' => $targetMarket,
             'keyword_count' => $keywordCount,
             'pages_target' => $pagesTarget,
+            'categories' => $taskOptions['categories'] ?? [],
         ]);
 
         $fresh = $this->tasks->find($taskId);

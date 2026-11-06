@@ -255,16 +255,18 @@ final class AiService
     public function generateKeywords(array $task, int $count): array
     {
         $prompt = $this->prompt('keyword_generation');
+        $categories = CategoryService::sanitize($task['categories'] ?? ($task['options']['categories'] ?? []));
         $variables = [
             'city' => (string) $task['city'],
             'country' => (string) $task['country'],
             'target_market' => (string) $task['target_market'],
             'count' => (string) $count,
             'current_year' => date('Y'),
+            'categories' => CategoryService::promptList($categories),
         ];
         $result = $this->json([
             ['role' => 'system', 'content' => $this->render($prompt['system_prompt'], $variables)],
-            ['role' => 'user', 'content' => $this->render($prompt['user_prompt'], $variables)],
+            ['role' => 'user', 'content' => $this->render($prompt['user_prompt'], $variables) . $this->storeFirstRules((string) $prompt['user_prompt'], $variables) . $this->keywordCategoryInstruction($categories, $count, (string) $task['city'])],
         ], ['prompt_code' => 'keyword_generation', 'temperature' => 0.5, 'max_tokens' => 3000]);
 
         $items = $result['keywords'] ?? $result;
@@ -326,7 +328,7 @@ final class AiService
         ];
         $result = $this->json([
             ['role' => 'system', 'content' => $this->render($prompt['system_prompt'], $variables)],
-            ['role' => 'user', 'content' => $this->render($prompt['user_prompt'], $variables)],
+            ['role' => 'user', 'content' => $this->render($prompt['user_prompt'], $variables) . $this->classificationCategoryInstruction((string) $prompt['user_prompt'])],
         ], ['prompt_code' => 'domain_classification', 'temperature' => 0.1, 'max_tokens' => 4000]);
 
         $rows = $result['results'] ?? $result;
@@ -349,6 +351,7 @@ final class AiService
             $normalized[$n] = [
                 'n' => $n,
                 'is_target' => (bool) $isTarget,
+                'category' => BlocklistService::normalizeCategory((string) ($row['category'] ?? ($isTarget ? 'enterprise' : 'other'))),
                 'confidence' => max(0.0, min(1.0, (float) ($row['confidence'] ?? 0.5))),
                 'reason' => Str::limit((string) ($row['reason'] ?? ''), 450),
             ];
@@ -357,6 +360,23 @@ final class AiService
             throw new HttpException(502, 'AI 返回的企业判断结果为空', 'ai_empty_classification');
         }
         return array_values($normalized);
+    }
+
+    /**
+     * 让 AI 对不合格域名返回 category，用于写入禁止采集名单。
+     * 提示词里已自带 category 要求（后台自行改过）时不再追加。
+     */
+    private function classificationCategoryInstruction(string $userPrompt): string
+    {
+        if (str_contains($userPrompt, 'category')) {
+            return '';
+        }
+        return "\n\n补充要求：每个结果必须额外返回 category 字段。is_target 为 true 时填 \"enterprise\"；为 false 时取下列之一："
+            . "b2b_platform（B2B 平台/供应商平台/批发平台）、marketplace（B2C 电商平台/第三方店铺）、directory（黄页/名录/比价聚合）、"
+            . "social（社交媒体）、media（新闻/百科/论坛/博客）、gov_org（政府/协会/展会）、recruitment（招聘）、"
+            . "foreign_local（海外本地公司）、non_enterprise（停放域名/空站/个人站/非企业独立站）、"
+            . "city_mismatch（是合格的中国企业独立站，但与目标城市无关）、other（其他不符合）。\n"
+            . '返回示例：{"results":[{"n":1,"is_target":false,"category":"b2b_platform","confidence":0.9,"reason":"B2B 供应商平台"}]}';
     }
 
     /**
@@ -390,6 +410,49 @@ final class AiService
         ];
     }
 
+    /**
+     * 电话标准化：把每家企业抓取到的原始电话整理成 E.164 并判断手机/座机。
+     * 优先使用后台「提示词模板」里的 phone_normalization，没有时用内置默认模板。
+     *
+     * @param array<int, array<string, mixed>> $items 每项含 n、company、domain、phones_raw 等
+     * @return array<int, array{numbers:array<int, array<string, mixed>>}> 以 n 为键
+     */
+    public function normalizePhones(array $task, array $items): array
+    {
+        try {
+            $prompt = $this->prompt('phone_normalization');
+        } catch (\Throwable) {
+            $prompt = require BASE_PATH . '/app/Data/phone_prompt.php';
+        }
+        $variables = [
+            'city' => (string) ($task['city'] ?? ''),
+            'default_country' => '86（中国大陆）',
+            'companies' => json_encode($items, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ];
+        $result = $this->json([
+            ['role' => 'system', 'content' => $this->render((string) $prompt['system_prompt'], $variables)],
+            ['role' => 'user', 'content' => $this->render((string) $prompt['user_prompt'], $variables)],
+        ], ['prompt_code' => 'phone_normalization', 'temperature' => 0.0, 'max_tokens' => 4000]);
+
+        $rows = $result['results'] ?? $result;
+        if (!is_array($rows)) {
+            throw new HttpException(502, 'AI 未返回电话标准化结果', 'ai_invalid_output');
+        }
+        $out = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $n = (int) ($row['n'] ?? $row['index'] ?? 0);
+            if ($n < 1) {
+                continue;
+            }
+            $numbers = $row['numbers'] ?? $row['phones'] ?? [];
+            $out[$n] = ['numbers' => is_array($numbers) ? array_values(array_filter($numbers, 'is_array')) : []];
+        }
+        return $out;
+    }
+
     /** @return array<string, mixed> */
     public function extractContacts(array $task, array $website, string $pagesText): array
     {
@@ -403,6 +466,50 @@ final class AiService
             ['role' => 'user', 'content' => $this->render($prompt['user_prompt'], $variables)],
         ], ['prompt_code' => 'contact_extraction', 'temperature' => 0.0, 'max_tokens' => 2200]);
         return $result;
+    }
+
+    /**
+     * 「独立商城站优先」规则：数据库里的模板还没有该规则时由代码强制追加，保证关键词一定偏向搜出独立站。
+     *
+     * @param array<string, string> $variables
+     */
+    private function storeFirstRules(string $userPrompt, array $variables): string
+    {
+        if (str_contains($userPrompt, '独立商城站优先策略')) {
+            return '';
+        }
+        $file = BASE_PATH . '/app/Data/keyword_store_rules.php';
+        $rules = is_file($file) ? require $file : '';
+        if (!is_string($rules) || $rules === '') {
+            return '';
+        }
+        return "\n\n" . $this->render($rules, $variables);
+    }
+
+    /**
+     * 关键词生成的分类补充要求。
+     * 选了分类：按「城市 + 产品分类」生成企业独立站与门户站搜索词，并覆盖各分类。
+     * 没选分类：不追加任何内容，沿用模板里仅按城市生成的规则。
+     *
+     * @param array<int, string> $categories
+     */
+    private function keywordCategoryInstruction(array $categories, int $count, string $city): string
+    {
+        if ($categories === []) {
+            return '';
+        }
+        $list = CategoryService::promptList($categories);
+        $perCategory = max(1, (int) floor($count / count($categories)));
+        return "\n\n【产品分类定向要求（优先级高于上文的行业发散规则）】\n"
+            . "本次任务只针对下列产品分类（格式：英文名 | 中文名 | 所属大类），所有关键词必须是「{$city} + 产品分类」的组合：\n{$list}\n\n"
+            . "1. 每个关键词必须同时包含城市英文名和某一个分类的英文产品词（可使用该分类英文名的核心词或常见同义词），不要出现未选分类的产品。\n"
+            . "2. 关键词总数约 {$count} 条，尽量让每个分类至少有 {$perCategory} 条，所选分类较多时优先覆盖全部分类。\n"
+            . "3. 以「独立商城站优先策略」为主：每个分类的关键词绝大多数（约 80%）面向独立站，少量（约 20%）面向行业门户站。两类网站如下：\n"
+            . "   - 企业独立站/品牌官网/DTC 独立商城：manufacturer、factory、official website、brand、online store、OEM/ODM、custom。\n"
+            . "   - 行业门户站/垂直行业网站：industry portal、trade portal、industry directory、association、expo、supplier guide，用于发现该产品领域的门户站和行业垂直站。\n"
+            . "4. intent 字段：企业独立站类使用 manufacturer/official/dtc/buyer，门户站类使用 portal；language 固定为 \"en\"。\n"
+            . "5. 仍然不得使用 site:、引号、减号、OR 等运算符，不要编造具体企业名称。\n"
+            . '仅返回 JSON：{"keywords":[{"keyword":"Wuhan LED lamps manufacturer","intent":"manufacturer","language":"en"},{"keyword":"Wuhan LED lighting industry portal","intent":"portal","language":"en"}]}';
     }
 
     /** @return array<string, mixed> */

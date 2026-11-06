@@ -9,7 +9,9 @@ $navItems = [
     ['key' => 'dashboard', 'label' => '总览', 'href' => '/admin', 'icon' => '<path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6V11h-6v9Zm0-16v5h6V4h-6Z"/>'],
     ['key' => 'tasks', 'label' => '城市任务', 'href' => '/admin/tasks', 'icon' => '<path d="M4 6h16M4 12h10M4 18h7"/><circle cx="19" cy="12" r="2"/><circle cx="15" cy="18" r="2"/>'],
     ['key' => 'relays', 'label' => 'AI 中转站', 'href' => '/admin/relays', 'icon' => '<path d="M12 3v4m0 10v4M5 12H3m18 0h-2M7.05 7.05 5.64 5.64m12.72 12.72-1.41-1.41M7.05 16.95l-1.41 1.41M18.36 5.64l-1.41 1.41"/><circle cx="12" cy="12" r="4"/>'],
+    ['key' => 'blocklist', 'label' => '禁止采集名单', 'href' => '/admin/blocklist', 'icon' => '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>'],
     ['key' => 'serper', 'label' => 'Serper 账号', 'href' => '/admin/serper', 'icon' => '<path d="M4 18 9 8l4 6 3-8 4 12"/><path d="M4 21h16"/>'],
+    ['key' => 'categories', 'label' => '产品分类', 'href' => '/admin/categories', 'icon' => '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 17.5h7M17.5 14v7"/>'],
     ['key' => 'prompts', 'label' => '提示词模板', 'href' => '/admin/prompts', 'icon' => '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>'],
     ['key' => 'settings', 'label' => '系统设置', 'href' => '/admin/settings', 'icon' => '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21h-4v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.51-1H3v-4h.09A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8.9 4.6 1.7 1.7 0 0 0 10 3.09V3h4v.09a1.7 1.7 0 0 0 1 1.51 1.7 1.7 0 0 0 1.87-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 8.9a1.7 1.7 0 0 0 1.51 1H21v4h-.09a1.7 1.7 0 0 0-1.51 1Z"/>'],
 ];

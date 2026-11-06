@@ -26,6 +26,7 @@ export type Company = {
   country?: string | null;
   phone?: string | null;
   phone_alt?: string | null;
+  phone_type?: string | null;
   email?: string | null;
   whatsapp?: string | null;
   address?: string | null;

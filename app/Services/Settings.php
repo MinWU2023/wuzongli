@@ -97,7 +97,7 @@ final class Settings
     {
         return [
             'keyword_count' => '24',
-            'serp_pages' => '3',
+            'serp_pages' => '0',
             'classify_batch' => '30',
             'max_attempts' => '3',
             'google_domain' => 'www.google.com',

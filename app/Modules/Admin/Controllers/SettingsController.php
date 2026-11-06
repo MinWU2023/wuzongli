@@ -34,7 +34,7 @@ final class SettingsController extends AdminController
     {
         $this->guardCsrf();
         $keywordCount = max(6, min(60, $this->request->int('keyword_count', 24)));
-        $serpPages = max(1, min(10, $this->request->int('serp_pages', 3)));
+        $serpPages = max(0, min(\App\Services\PipelineService::AUTO_PAGE_CAP, $this->request->int('serp_pages', 0)));
         $batch = max(5, min(50, $this->request->int('classify_batch', 30)));
         $attempts = max(1, min(10, $this->request->int('max_attempts', 3)));
         $delay = max(500, min(15000, $this->request->int('request_delay_ms', 2500)));

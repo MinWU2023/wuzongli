@@ -156,7 +156,8 @@ if (!function_exists('stage_meta')) {
             'classify' => ['label' => 'AI 企业筛选', 'short' => '筛选', 'index' => 2, 'icon' => 'filter'],
             'discover' => ['label' => '识别官网页面', 'short' => '页面', 'index' => 3, 'icon' => 'layout'],
             'extract' => ['label' => '提取联系方式', 'short' => '联系', 'index' => 4, 'icon' => 'phone'],
-            'done' => ['label' => '任务完成', 'short' => '完成', 'index' => 5, 'icon' => 'check'],
+            'phone' => ['label' => 'AI 电话标准化', 'short' => '电话', 'index' => 5, 'icon' => 'phone'],
+            'done' => ['label' => '任务完成', 'short' => '完成', 'index' => 6, 'icon' => 'check'],
         ];
     }
 }

@@ -17,7 +17,7 @@ import { SettingsScreen } from './src/screens/SettingsScreen';
 import { TasksScreen } from './src/screens/TasksScreen';
 import { loadConfig, saveConfig } from './src/storage';
 import { colors } from './src/theme';
-import type { AppConfig } from './types';
+import type { AppConfig } from './src/types';
 
 const Tab = createBottomTabNavigator();
 
@@ -47,7 +47,22 @@ export default function App() {
 
   useEffect(() => {
     let alive = true;
-    loadConfig()
+    // 本地存储在部分 release 包里可能永不返回，3 秒后用默认配置继续启动，避免一直卡在启动页
+    const timeout = new Promise<AppConfig>((resolve) =>
+      setTimeout(
+        () =>
+          resolve({
+            apiBase: 'https://google.yzz.me',
+            apiKey: '',
+            deviceId: 'm-' + Math.random().toString(36).slice(2, 10),
+            acceptOrders: false,
+            aiBaseUrl: '',
+            aiModel: 'gpt-4o-mini',
+          }),
+        3000
+      )
+    );
+    Promise.race([loadConfig(), timeout])
       .then((cfg) => {
         if (alive) setConfig(cfg);
       })

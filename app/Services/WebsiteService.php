@@ -192,6 +192,17 @@ final class WebsiteService
             'raw_json' => json_encode($raw, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             'updated_at' => now(),
         ];
+        if (PhoneService::ready()) {
+            // 重新提取后，电话需要重新走标准化。
+            $row['phone_status'] = 'pending';
+            $row['phone_attempts'] = 0;
+            $row['phone_raw'] = null;
+            $row['phone_type'] = null;
+            $row['phone_country'] = null;
+            $row['phone_list_json'] = null;
+            $row['phone_note'] = null;
+            $row['phone_normalized_at'] = null;
+        }
         Db::instance()->ensureConnected();
         $existing = Db::instance()->table('companies')->where('task_id', (int) $task['id'])->where('website_id', (int) $website['id'])->first();
         if ($existing === null) {

@@ -29,17 +29,19 @@ final class TaskService
             $keywordCount = (int) setting('keyword_count', 24);
         }
         $keywordCount = max(6, min(60, $keywordCount));
-        $pagesTarget = (int) ($input['pages_target'] ?? 0);
-        if ($pagesTarget <= 0) {
-            $pagesTarget = (int) setting('serp_pages', 3);
-        }
-        $pagesTarget = max(1, min(10, $pagesTarget));
+        // 0 = 自动翻页：每个关键词一直翻到 Google 没有更多结果为止（受安全上限约束）。
+        $pagesTarget = isset($input['pages_target']) && $input['pages_target'] !== null
+            ? (int) $input['pages_target']
+            : (int) setting('serp_pages', 0);
+        $pagesTarget = $pagesTarget <= 0 ? 0 : min(PipelineService::AUTO_PAGE_CAP, $pagesTarget);
         $language = preg_match('/^[a-z\-]{2,10}$/', (string) ($input['language'] ?? 'en')) ? (string) $input['language'] : 'en';
 
+        $categories = CategoryService::sanitize($input['categories'] ?? []);
         $options = [
             'keyword_count' => $keywordCount,
             'pages_target' => $pagesTarget,
             'target_market' => Str::limit($targetMarket, 100, ''),
+            'categories' => $categories,
         ];
         $id = Db::instance()->insert('tasks', [
             'city' => $city,
@@ -54,7 +56,7 @@ final class TaskService
             'created_at' => now(),
             'updated_at' => now(),
         ]);
-        $this->log($id, 'keywords', 'info', '已创建城市任务：' . $city, $options);
+        $this->log($id, 'keywords', 'info', '已创建城市任务：' . $city . ($categories !== [] ? '（产品分类：' . CategoryService::label($categories) . '）' : '（未选分类，仅按城市生成）'), $options);
         return $this->find($id);
     }
 
@@ -81,10 +83,13 @@ final class TaskService
         $keywordCount = (int) ($input['keyword_count'] ?? $options['keyword_count'] ?? $task['keyword_count'] ?? 24);
         $pagesTarget = (int) ($input['pages_target'] ?? $options['pages_target'] ?? $task['pages_target'] ?? 3);
         $keywordCount = max(6, min(60, $keywordCount));
-        $pagesTarget = max(1, min(10, $pagesTarget));
+        $pagesTarget = $pagesTarget <= 0 ? 0 : min(PipelineService::AUTO_PAGE_CAP, $pagesTarget);
         $options['keyword_count'] = $keywordCount;
         $options['pages_target'] = $pagesTarget;
         $options['target_market'] = Str::limit($targetMarket, 100, '');
+        if (array_key_exists('categories', $input)) {
+            $options['categories'] = CategoryService::sanitize($input['categories']);
+        }
 
         Db::instance()->update('tasks', [
             'city' => $city,
@@ -114,7 +119,10 @@ final class TaskService
         $options = json_decode((string) ($task['options_json'] ?? '{}'), true);
         $task['options'] = is_array($options) ? $options : [];
         $task['keyword_count'] = (int) ($task['options']['keyword_count'] ?? setting('keyword_count', 24));
-        $task['pages_target'] = (int) ($task['options']['pages_target'] ?? setting('serp_pages', 3));
+        $task['pages_target'] = (int) ($task['options']['pages_target'] ?? setting('serp_pages', 0));
+        $task['categories'] = CategoryService::sanitize($task['options']['categories'] ?? []);
+        $task['category_items'] = CategoryService::describe($task['categories']);
+        $task['category_label'] = CategoryService::label($task['categories']);
         return $task;
     }
 
@@ -177,6 +185,18 @@ final class TaskService
         $counts['pending_classify'] = max(0, $counts['websites_total'] - $counts['websites_classified']);
         $counts['pending_crawl'] = max(0, $counts['websites_approved'] - $counts['pages_done']);
         $counts['pending_extract'] = max(0, $counts['extract_ready'] - $counts['companies_extracted']);
+        $counts['pending_phone'] = 0;
+        $counts['phones_done'] = 0;
+        if (PhoneService::ready()) {
+            $phone = Db::instance()->fetch(
+                'SELECT COALESCE(SUM(CASE WHEN `phone_status` = \'pending\' THEN 1 ELSE 0 END), 0) AS pending,
+                        COALESCE(SUM(CASE WHEN `phone_status` IN (\'done\', \'skipped\') THEN 1 ELSE 0 END), 0) AS done
+                 FROM `' . Db::instance()->tableName('companies') . '` WHERE `task_id` = ?',
+                [$taskId]
+            ) ?: [];
+            $counts['pending_phone'] = (int) ($phone['pending'] ?? 0);
+            $counts['phones_done'] = (int) ($phone['done'] ?? 0);
+        }
 
         return $counts;
     }
@@ -188,19 +208,26 @@ final class TaskService
             return 100;
         }
         $stage = (string) $task['stage'];
-        $base = ['keywords' => 0, 'serp' => 10, 'classify' => 35, 'discover' => 55, 'extract' => 75][$stage] ?? 0;
-        $span = ['keywords' => 10, 'serp' => 25, 'classify' => 20, 'discover' => 20, 'extract' => 25][$stage] ?? 0;
+        $base = ['keywords' => 0, 'serp' => 10, 'classify' => 35, 'discover' => 55, 'extract' => 75, 'phone' => 90][$stage] ?? 0;
+        $span = ['keywords' => 10, 'serp' => 25, 'classify' => 20, 'discover' => 20, 'extract' => 15, 'phone' => 9][$stage] ?? 0;
         $ratio = 0.0;
         if ($stage === 'keywords') {
             $ratio = $counts['keywords_total'] > 0 ? 0.7 : 0.0;
         } elseif ($stage === 'serp') {
-            $ratio = $counts['serp_pages_target'] > 0 ? $counts['serp_pages_done'] / $counts['serp_pages_target'] : 0.0;
+            if ((int) ($task['pages_target'] ?? 1) === 0) {
+                // 自动翻页：每个关键词的总页数事先未知，按已搜完的关键词比例估算。
+                $ratio = $counts['keywords_total'] > 0 ? $counts['keywords_done'] / $counts['keywords_total'] : 0.0;
+            } else {
+                $ratio = $counts['serp_pages_target'] > 0 ? $counts['serp_pages_done'] / $counts['serp_pages_target'] : 0.0;
+            }
         } elseif ($stage === 'classify') {
             $ratio = $counts['websites_total'] > 0 ? $counts['websites_classified'] / $counts['websites_total'] : 0.0;
         } elseif ($stage === 'discover') {
             $ratio = $counts['websites_approved'] > 0 ? $counts['pages_done'] / $counts['websites_approved'] : 0.0;
         } elseif ($stage === 'extract') {
             $ratio = $counts['extract_ready'] > 0 ? $counts['companies_extracted'] / $counts['extract_ready'] : 0.0;
+        } elseif ($stage === 'phone') {
+            $ratio = $counts['companies'] > 0 ? $counts['phones_done'] / $counts['companies'] : 0.0;
         }
         $ratio = max(0.0, min(1.0, $ratio));
         return (int) max(0, min(99, round($base + $span * $ratio)));

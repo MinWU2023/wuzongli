@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   FlatList,
   Linking,
   Pressable,
@@ -15,6 +16,14 @@ import type { AppConfig, Company } from '../types';
 
 type Props = {
   config: AppConfig;
+};
+
+const PHONE_TYPE_LABEL: Record<string, string> = {
+  mobile: '手机',
+  landline: '座机',
+  toll_free: '400/800',
+  voip: '网络电话',
+  fax: '传真',
 };
 
 export function CompaniesScreen({ config }: Props) {
@@ -60,7 +69,11 @@ export function CompaniesScreen({ config }: Props) {
   const dial = async (value?: string | null) => {
     if (!value) return;
     const cleaned = value.replace(/[^\d+]/g, '');
-    await Linking.openURL(`tel:${cleaned}`);
+    try {
+      await Linking.openURL(`tel:${cleaned}`);
+    } catch {
+      Alert.alert('无法拨号', '当前设备无法打开拨号盘');
+    }
   };
 
   return (
@@ -126,7 +139,9 @@ export function CompaniesScreen({ config }: Props) {
               {!!item.phone && (
                 <Pressable onPress={() => dial(item.phone)} style={styles.phoneChip}>
                   <Text style={styles.phoneText}>{item.phone}</Text>
-                  <Text style={styles.dialHint}>点击拨打</Text>
+                  <Text style={styles.dialHint}>
+                    {PHONE_TYPE_LABEL[item.phone_type || ''] ? PHONE_TYPE_LABEL[item.phone_type || ''] + ' · ' : ''}点击拨打
+                  </Text>
                 </Pressable>
               )}
               {!!item.email && <Muted>{item.email}</Muted>}

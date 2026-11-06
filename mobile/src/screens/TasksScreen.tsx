@@ -34,8 +34,29 @@ const STAGE_LABEL: Record<string, string> = {
   classify: 'AI筛选',
   discover: '页面识别',
   extract: '联系提取',
+  phone: '电话整理',
   done: '完成',
 };
+
+const STATUS_LABEL: Record<string, string> = {
+  active: '运行中',
+  paused: '已暂停',
+  failed: '异常',
+  completed: '已完成',
+  stopped: '已终止',
+};
+
+// 关键词数 6–60；页数 0 表示自动翻页（服务端上限 30 页）
+function parseKeywords(value: string): number {
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n > 0 ? Math.min(60, Math.max(6, n)) : 24;
+}
+
+function parsePages(value: string): number {
+  if (value.trim() === '') return 3;
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n >= 0 ? Math.min(30, n) : 3;
+}
 
 const REWIND_STAGES = [
   { value: 'keywords', label: '01·关键词' },
@@ -43,6 +64,7 @@ const REWIND_STAGES = [
   { value: 'classify', label: '03·AI筛选' },
   { value: 'discover', label: '04·页面识别' },
   { value: 'extract', label: '05·联系方式' },
+  { value: 'phone', label: '06·电话标准化' },
 ];
 
 export function TasksScreen({ config }: Props) {
@@ -113,8 +135,8 @@ export function TasksScreen({ config }: Props) {
       await createTask(config.apiBase, config.apiKey, {
         city: city.trim(),
         target_market: market.trim() || '全球',
-        keyword_count: Number(keywordCount) || 24,
-        pages_target: Number(pagesTarget) || 3,
+        keyword_count: parseKeywords(keywordCount),
+        pages_target: parsePages(pagesTarget),
       });
       setCreateOpen(false);
       await load();
@@ -138,7 +160,7 @@ export function TasksScreen({ config }: Props) {
     setCity(task.city || '');
     setMarket(task.target_market || '全球');
     setKeywordCount(String(task.keyword_count || 24));
-    setPagesTarget(String(task.pages_target || 3));
+    setPagesTarget(String(task.pages_target ?? 3));
     setEditOpen(true);
   };
 
@@ -148,8 +170,8 @@ export function TasksScreen({ config }: Props) {
       await updateTask(config.apiBase, config.apiKey, detail.id, {
         city: city.trim(),
         target_market: market.trim() || '全球',
-        keyword_count: Number(keywordCount) || 24,
-        pages_target: Number(pagesTarget) || 3,
+        keyword_count: parseKeywords(keywordCount),
+        pages_target: parsePages(pagesTarget),
       });
       setEditOpen(false);
       await load();
@@ -192,7 +214,7 @@ export function TasksScreen({ config }: Props) {
     setCity(task.city || '');
     setMarket(task.target_market || '全球');
     setKeywordCount(String(task.keyword_count || 24));
-    setPagesTarget(String(task.pages_target || 3));
+    setPagesTarget(String(task.pages_target ?? 3));
     setRewindStage('keywords');
     setRewindOpen(true);
   };
@@ -204,8 +226,8 @@ export function TasksScreen({ config }: Props) {
         stage: rewindStage,
         city: city.trim(),
         target_market: market.trim() || '全球',
-        keyword_count: Number(keywordCount) || 24,
-        pages_target: Number(pagesTarget) || 3,
+        keyword_count: parseKeywords(keywordCount),
+        pages_target: parsePages(pagesTarget),
       });
       setRewindOpen(false);
       await load();
@@ -276,7 +298,7 @@ export function TasksScreen({ config }: Props) {
                       #{item.id} · {STAGE_LABEL[item.stage || ''] || item.stage || '—'} · 进度 {item.progress || 0}%
                     </Muted>
                   </View>
-                  <Badge label={item.status || '—'} tone={statusTone(item.status)} />
+                  <Badge label={STATUS_LABEL[item.status || ''] || item.status || '—'} tone={statusTone(item.status)} />
                 </View>
               </Pressable>
               <View style={styles.actions}>
@@ -396,7 +418,7 @@ function FormModal(props: {
           <Field label="城市" value={props.city} onChangeText={props.onCity} placeholder="例如：武汉" />
           <Field label="目标市场" value={props.market} onChangeText={props.onMarket} placeholder="全球" />
           <Field label="关键词数量" value={props.keywordCount} onChangeText={props.onKeywords} keyboardType="number-pad" />
-          <Field label="每个关键词 Google 页数" value={props.pagesTarget} onChangeText={props.onPages} keyboardType="number-pad" />
+          <Field label="每个关键词 Google 页数（0 = 自动翻页）" value={props.pagesTarget} onChangeText={props.onPages} keyboardType="number-pad" />
           <PrimaryButton label={props.submitLabel} onPress={props.onSubmit} />
           <View style={{ height: 10 }} />
           <PrimaryButton label="取消" tone="ghost" onPress={props.onClose} />

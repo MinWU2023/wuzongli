@@ -44,7 +44,8 @@ final class TaskController extends ApiController
             'city' => $this->request->string('city'),
             'target_market' => $this->request->string('target_market', '全球'),
             'keyword_count' => $this->request->int('keyword_count', 0) ?: null,
-            'pages_target' => $this->request->int('pages_target', 0) ?: null,
+            'pages_target' => $this->request->input('pages_target') !== null ? $this->request->int('pages_target', 0) : null,
+            'categories' => $this->request->input('categories', []),
             'language' => $this->request->string('language', 'en'),
         ]);
         $this->ok([
@@ -141,6 +142,16 @@ final class TaskController extends ApiController
             \App\Services\Settings::set('serper_api_key', \App\Core\Crypto::encrypt($overrideKey));
         }
         $this->ok($this->pipeline->searchSerper($taskId, $keywordId, $page, $overrideKey !== '' ? $overrideKey : null));
+    }
+
+    /** 出海外贸产品分类库（大类 → 细分类，中英文）。 */
+    public function categories(): never
+    {
+        $this->ok([
+            'groups' => \App\Services\CategoryService::tree(),
+            'stats' => \App\Services\CategoryService::stats(),
+            'max_selected' => \App\Services\CategoryService::MAX_SELECTED,
+        ]);
     }
 
     public function settings(): never
@@ -288,6 +299,11 @@ final class TaskController extends ApiController
         $this->ok($this->pipeline->classifyBatch($this->taskId($id)));
     }
 
+    public function normalizePhones(string $id): never
+    {
+        $this->ok($this->pipeline->normalizePhonesBatch($this->taskId($id)));
+    }
+
     public function pages(string $id, string $websiteId): never
     {
         $taskId = $this->taskId($id);
@@ -328,9 +344,11 @@ final class TaskController extends ApiController
         if ($keywordCount > 0) {
             $payload['keyword_count'] = $keywordCount;
         }
-        $pagesTarget = $this->request->int('pages_target', 0);
-        if ($pagesTarget > 0) {
-            $payload['pages_target'] = $pagesTarget;
+        if ($this->request->input('pages_target') !== null) {
+            $payload['pages_target'] = max(0, $this->request->int('pages_target', 0));
+        }
+        if ($this->request->input('categories') !== null) {
+            $payload['categories'] = $this->request->input('categories');
         }
         $task = $this->tasks->update($taskId, $payload);
         $this->ok([
@@ -398,6 +416,7 @@ final class TaskController extends ApiController
             'target_market' => $this->request->input('target_market'),
             'keyword_count' => $this->request->int('keyword_count', 0),
             'pages_target' => $this->request->int('pages_target', 0),
+            'categories' => $this->request->input('categories'),
         ]);
         $this->ok([
             'task' => $task,
@@ -443,13 +462,14 @@ final class TaskController extends ApiController
             throw new \RuntimeException('Unable to create CSV stream');
         }
         fwrite($stream, "\xEF\xBB\xBF");
-        fputcsv($stream, ['公司名', '域名', '城市', '电话', '备用电话', '邮箱', 'LinkedIn', 'TikTok', 'YouTube', 'Facebook', 'Instagram', 'WhatsApp', '地址', '来源页'], ',', '"', '\\');
+        fputcsv($stream, ['公司名', '域名', '城市', '电话', '号码类型', '备用电话', '邮箱', 'LinkedIn', 'TikTok', 'YouTube', 'Facebook', 'Instagram', 'WhatsApp', '地址', '来源页'], ',', '"', '\\');
         foreach ($rows as $row) {
             fputcsv($stream, [
                 csv_safe($row['company_name'] ?? ''),
                 $row['domain'] ?? '',
                 csv_safe($row['city'] ?? ''),
                 $row['phone'] ?? '',
+                \App\Services\PhoneService::TYPE_LABELS[$row['phone_type'] ?? ''] ?? '',
                 csv_safe($row['phone_alt'] ?? ''),
                 csv_safe($row['email'] ?? ''),
                 $row['linkedin'] ?? '',

@@ -9,7 +9,8 @@
         { key: 'classify', no: '03', label: 'AI 筛选', full: '企业属性筛选' },
         { key: 'discover', no: '04', label: '官网识别', full: '关键页面识别' },
         { key: 'extract', no: '05', label: '联系提取', full: '联系方式提取' },
-        { key: 'done', no: '06', label: '完成', full: '线索入库' }
+        { key: 'phone', no: '06', label: '电话整理', full: 'AI 电话标准化' },
+        { key: 'done', no: '07', label: '完成', full: '线索入库' }
     ];
     const STAGE_LABEL = {
         keywords: 'AI 生成关键词',
@@ -17,6 +18,7 @@
         classify: 'AI 企业筛选',
         discover: '官网页面识别',
         extract: '联系方式提取',
+        phone: 'AI 电话标准化',
         done: '已完成'
     };
     const ACTION_LABEL = {
@@ -26,6 +28,7 @@
         classify_domains: 'AI 筛选企业独立站',
         crawl_website: '抓取官网首页',
         extract_contacts: '提取联系方式',
+        normalize_phones: 'AI 标准化电话号码',
         done: '全部流程完成',
         paused: '任务已暂停',
         failed: '任务异常'
@@ -43,6 +46,7 @@
         classify_domains: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16l-6 8v5l-4 2v-7L4 5Z"/></svg>',
         crawl_website: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>',
         extract_contacts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6"/></svg>',
+        normalize_phones: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z"/></svg>',
         done: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 13 4 4L19 7"/></svg>',
         default: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
     };
@@ -78,7 +82,14 @@
         serverRunnerEnabled: true,
         cooldownUntil: 0,
         search: '',
-        initialized: false
+        initialized: false,
+        /** 产品分类库（/api/categories）与选择状态 */
+        categoryTree: null,
+        categoryMax: 12,
+        newCategories: [],
+        editCategories: [],
+        categoryTarget: 'new',
+        categoryDraft: []
     };
 
     class ApiError extends Error {
@@ -185,7 +196,7 @@
 
     function actionable(next) {
         return !!next && next.task && next.task.status === 'active' &&
-            ['generate_keywords', 'fetch_serp', 'search_serper', 'classify_domains', 'crawl_website', 'extract_contacts'].includes(next.action);
+            ['generate_keywords', 'fetch_serp', 'search_serper', 'classify_domains', 'crawl_website', 'extract_contacts', 'normalize_phones'].includes(next.action);
     }
 
     /* ------------------------------------------------------------------ */
@@ -775,6 +786,19 @@
             await sleep(350);
             return data;
         }
+        if (action === 'normalize_phones') {
+            const job = next.job || {};
+            addLocal('AI 正在把电话整理成可直接拨打的格式，并判断手机/座机（待处理 ' + Number(job.pending_count || 0) + ' 家）…', 'info');
+            const data = await request('/api/tasks/' + taskId + '/phones/normalize', { method: 'POST', timeout: 240000 });
+            const done = Number(data.normalized || 0);
+            const retry = Number(data.retry || 0);
+            addLocal('本批电话整理完成：已标准化 ' + done + ' 家' +
+                (Number(data.skipped || 0) ? '，无电话跳过 ' + Number(data.skipped) + ' 家' : '') +
+                (Number(data.fallback || 0) ? '，规则兜底 ' + Number(data.fallback) + ' 家' : '') +
+                (retry ? '，待重试 ' + retry + ' 家' : '') + '。', retry && !done ? 'warn' : 'success');
+            await sleep(400);
+            return data;
+        }
         throw new ApiError('未知动作：' + action, 'unknown_action');
     }
 
@@ -783,7 +807,7 @@
         if (!keywordId) throw new ApiError('服务器没有提供关键词 ID。', 'missing_keyword_id');
         const query = String(job.keyword || '').trim();
         const page = Number(job.page || 1);
-        const pagesTarget = Number(job.pages_target || 1);
+        const pagesTarget = job.auto_pages ? '∞' : Number(job.pages_target || 1);
         const liveInputKey = $('#serperKeyInput') && !$('#settingsModal')?.hidden ? $('#serperKeyInput').value.trim() : '';
         const apiKey = String(liveInputKey || state.config.serperApiKey || DEFAULT_CONFIG.serperApiKey || '').trim();
 
@@ -807,7 +831,7 @@
                         provider: 'serper'
                     });
                     if (Number(data.parsed || 0) > 0) {
-                        addLocal('Serper 第 ' + page + ' / ' + pagesTarget + ' 页解析 ' + data.parsed + ' 条，新增 ' + (data.new_domains || 0) + ' 个域名。', 'success');
+                        addLocal('Serper 第 ' + page + ' / ' + pagesTarget + ' 页解析 ' + data.parsed + ' 条，新增 ' + (data.new_domains || 0) + ' 个域名' + (data.blocked ? '，禁止名单拦截 ' + data.blocked + ' 条' : '') + (data.known_skipped ? '，已采集过的合格域名跳过 ' + data.known_skipped + ' 条' : '') + '。', 'success');
                     }
                     if (serperRes.credits !== null && serperRes.credits !== undefined) {
                         addLocal('Serper 剩余额度：' + serperRes.credits, 'info');
@@ -815,13 +839,13 @@
                     await sleep(Math.max(250, Number(job.delay_ms || 300)));
                     return data;
                 }
-                if (action === 'search_serper') {
+                if (action === 'search_serper' && page <= 1) {
                     return executeSerperServer(taskId, job);
                 }
                 const emptyData = await postSerp(taskId, job, {
                     results: [],
                     blocked: false,
-                    error: 'Serper 未返回搜索结果',
+                    error: page > 1 ? '' : 'Serper 未返回搜索结果',
                     provider: 'serper'
                 });
                 await sleep(Math.max(250, Number(job.delay_ms || 300)));
@@ -842,7 +866,7 @@
         const keywordId = Number(job.keyword_id || 0);
         if (!keywordId) throw new ApiError('服务器没有提供关键词 ID。', 'missing_keyword_id');
         const page = Number(job.page || 1);
-        const pagesTarget = Number(job.pages_target || 1);
+        const pagesTarget = job.auto_pages ? '∞' : Number(job.pages_target || 1);
         const liveInputKey = $('#serperKeyInput') && !$('#settingsModal')?.hidden ? $('#serperKeyInput').value.trim() : '';
         const serperApiKey = String(liveInputKey || state.config.serperApiKey || DEFAULT_CONFIG.serperApiKey || '').trim();
         addLocal('Serper · 「' + (job.keyword || '') + '」第 ' + page + ' / ' + pagesTarget + ' 页', 'info');
@@ -856,7 +880,7 @@
             }
         });
         if (Number(data.parsed || 0) > 0) {
-            addLocal('Serper 第 ' + page + ' / ' + pagesTarget + ' 页解析 ' + data.parsed + ' 条，新增 ' + (data.new_domains || 0) + ' 个域名。', 'success');
+            addLocal('Serper 第 ' + page + ' / ' + pagesTarget + ' 页解析 ' + data.parsed + ' 条，新增 ' + (data.new_domains || 0) + ' 个域名' + (data.blocked ? '，禁止名单拦截 ' + data.blocked + ' 条' : '') + (data.known_skipped ? '，已采集过的合格域名跳过 ' + data.known_skipped + ' 条' : '') + '。', 'success');
         } else if (data.skipped) {
             addLocal('该搜索页连续失败，已跳过：' + (data.message || ''), 'warn');
             toast('Serper 搜索页被跳过：' + (data.message || ''), 'warn', 5000);
@@ -872,7 +896,7 @@
 
     async function executeSerp(taskId, job) {
         if (!job.google_url) throw new ApiError('服务器没有提供 Google 搜索地址。', 'missing_google_url');
-        addLocal('Google · 「' + (job.keyword || '') + '」第 ' + (job.page || 1) + ' / ' + (job.pages_target || 1) + ' 页', 'info');
+        addLocal('Google · 「' + (job.keyword || '') + '」第 ' + (job.page || 1) + (job.auto_pages ? ' 页（自动翻页）' : ' / ' + (job.pages_target || 1) + ' 页'), 'info');
 
         let result = null;
         let tab = null;
@@ -910,12 +934,12 @@
                 html,
                 results: [],
                 blocked,
-                error: html ? '' : (tab ? '标签页未解析到结果' : '无法打开 Google 标签页')
+                error: html ? '' : (tab ? (Number(job.page || 1) > 1 && !blocked ? '' : '标签页未解析到结果') : '无法打开 Google 标签页')
             });
         }
 
         if (result && Number(result.parsed || 0) > 0) {
-            addLocal('第 ' + (job.page || 1) + ' 页解析 ' + result.parsed + ' 条结果，新增 ' + (result.new_domains || 0) + ' 个域名。', 'success');
+            addLocal('第 ' + (job.page || 1) + ' 页解析 ' + result.parsed + ' 条结果，新增 ' + (result.new_domains || 0) + ' 个域名' + (result.blocked ? '，禁止名单拦截 ' + result.blocked + ' 条' : '') + (result.known_skipped ? '，已采集过的合格域名跳过 ' + result.known_skipped + ' 条' : '') + '。', 'success');
         } else if (result && result.skipped) {
             addLocal('该搜索页连续失败，已跳过：' + (result.message || ''), 'warn');
             toast('搜索页被跳过：' + (result.message || 'Google 验证'), 'warn', 5000);
@@ -1000,7 +1024,7 @@
         setText('#taskId', '#' + task.id);
         setText('#taskCreated', '创建于 ' + formatDateTime(task.created_at, true));
         setText('#taskCity', task.city || '—');
-        setText('#taskMeta', '目标市场：' + (task.target_market || '全球') + ' · ' + Number(task.keyword_count || 0) + ' 个关键词 · 每个 ' + Number(task.pages_target || 0) + ' 页 Google');
+        setText('#taskMeta', '目标市场：' + (task.target_market || '全球') + ' · ' + Number(task.keyword_count || 0) + ' 个关键词 · ' + (Number(task.pages_target || 0) > 0 ? '每个 ' + Number(task.pages_target) + ' 页' : '自动翻页至无结果') + ' Google · ' + (task.category_label ? '分类：' + task.category_label : '未选分类（仅按城市）'));
         setText('#progressPercent', progress + '%');
         setText('#progressHint', status === 'paused' ? '任务已暂停' : (status === 'completed' ? '全部完成' : (STAGE_LABEL[task.stage] || '处理中')));
         const fill = $('#progressFill');
@@ -1021,7 +1045,7 @@
         setText('#missionCity', task.city || '—');
         setText('#missionMarket', task.target_market || '全球');
         setText('#missionKeywords', Number(task.keyword_count || 0) + ' 个');
-        setText('#missionPages', Number(task.pages_target || 0) + ' 页 / 词');
+        setText('#missionPages', Number(task.pages_target || 0) > 0 ? Number(task.pages_target) + ' 页 / 词' : '自动翻页');
         setText('#missionCreated', formatDateTime(task.created_at, true));
         setText('#missionStatus', STATUS_LABEL[status] || status);
         renderStepper(task);
@@ -1100,10 +1124,10 @@
         const chips = [];
         if (action === 'fetch_serp') {
             chips.push('关键词 ' + escapeHtml(job.keyword || ''));
-            chips.push('第 ' + Number(job.page || 1) + ' / ' + Number(job.pages_target || 0) + ' 页');
+            chips.push('第 ' + Number(job.page || 1) + (job.auto_pages ? ' 页（自动翻页）' : ' / ' + Number(job.pages_target || 0) + ' 页'));
         } else if (action === 'search_serper') {
             chips.push('关键词 ' + escapeHtml(job.keyword || ''));
-            chips.push('第 ' + Number(job.page || 1) + ' / ' + Number(job.pages_target || 0) + ' 页');
+            chips.push('第 ' + Number(job.page || 1) + (job.auto_pages ? ' 页（自动翻页）' : ' / ' + Number(job.pages_target || 0) + ' 页'));
             chips.push('Serper');
         } else if (action === 'classify_domains') {
             chips.push('待判断 ' + formatNumber(counts.pending_classify) + ' 个域名');
@@ -1114,6 +1138,9 @@
         } else if (action === 'extract_contacts') {
             chips.push(escapeHtml(job.domain || ''));
             chips.push((Array.isArray(job.pages) ? job.pages.length : 0) + ' 个页面');
+        } else if (action === 'normalize_phones') {
+            chips.push('待整理 ' + Number(job.pending_count || 0) + ' 家');
+            chips.push('每批 ' + Number(job.batch_size || 0) + ' 家');
         } else if (action === 'generate_keywords') {
             chips.push('目标 ' + Number(job.count || 0) + ' 个词');
         }
@@ -1695,15 +1722,165 @@
         }
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Product category picker                                            */
+    /* ------------------------------------------------------------------ */
+    async function loadCategoryTree() {
+        if (state.categoryTree) return state.categoryTree;
+        const data = await request('/api/categories', { timeout: 20000 });
+        state.categoryTree = Array.isArray(data.groups) ? data.groups : [];
+        state.categoryMax = Number(data.max_selected || 12);
+        return state.categoryTree;
+    }
+
+    function categoryLookup() {
+        const map = {};
+        (state.categoryTree || []).forEach((group) => {
+            group.items.forEach((item) => {
+                map[item.code] = Object.assign({ group_zh: group.zh, group_en: group.en }, item);
+            });
+        });
+        return map;
+    }
+
+    function categorySummary(codes) {
+        if (!codes || !codes.length) return '不选分类，仅按城市生成';
+        const lookup = categoryLookup();
+        const names = codes.map((code) => (lookup[code] ? lookup[code].zh : code));
+        const shown = names.slice(0, 3).join('、');
+        return '已选 ' + codes.length + ' 类：' + shown + (names.length > 3 ? ' 等' : '');
+    }
+
+    function refreshCategorySummary(target) {
+        const codes = target === 'edit' ? state.editCategories : state.newCategories;
+        const summary = $(target === 'edit' ? '#editCategorySummary' : '#newCategorySummary');
+        const button = $(target === 'edit' ? '#editCategoryBtn' : '#newCategoryBtn');
+        if (summary) summary.textContent = categorySummary(codes);
+        if (button) button.classList.toggle('has-value', !!(codes && codes.length));
+    }
+
+    async function openCategoryPicker(target) {
+        state.categoryTarget = target;
+        try {
+            await loadCategoryTree();
+        } catch (error) {
+            toast('分类库加载失败：' + error.message, 'error', 5000);
+            return;
+        }
+        state.categoryDraft = (target === 'edit' ? state.editCategories : state.newCategories).slice();
+        if ($('#categorySearch')) $('#categorySearch').value = '';
+        const stats = $('#categoryStats');
+        if (stats) {
+            const total = state.categoryTree.reduce((sum, group) => sum + group.items.length, 0);
+            stats.textContent = '共 ' + state.categoryTree.length + ' 个大类、' + total + ' 个细分类，最多可选 ' + state.categoryMax + ' 个。';
+        }
+        renderCategoryPicker();
+        openModal('#categoryModal');
+    }
+
+    function renderCategoryPicker() {
+        const body = $('#categoryBody');
+        if (!body) return;
+        const keyword = String($('#categorySearch') ? $('#categorySearch').value : '').trim().toLowerCase();
+        const draft = new Set(state.categoryDraft);
+        let html = '';
+        (state.categoryTree || []).forEach((group) => {
+            const groupMatch = !keyword || group.zh.toLowerCase().includes(keyword) || group.en.toLowerCase().includes(keyword);
+            const items = group.items.filter((item) => groupMatch || item.zh.toLowerCase().includes(keyword) || item.en.toLowerCase().includes(keyword));
+            if (!items.length) return;
+            const selectedCount = group.items.filter((item) => draft.has(item.code)).length;
+            html += '<section class="category-group" data-group="' + escapeHtml(group.code) + '">' +
+                '<div class="category-group-head">' +
+                    '<div><strong>' + escapeHtml(group.zh) + '</strong><small>' + escapeHtml(group.en) + '</small></div>' +
+                    '<div class="group-meta"><span>' + selectedCount + ' / ' + group.items.length + '</span>' +
+                    '<button type="button" class="group-all" data-group-all="' + escapeHtml(group.code) + '">' + (selectedCount === group.items.length ? '取消全选' : '全选') + '</button></div>' +
+                '</div>' +
+                '<div class="category-items">' +
+                items.map((item) => '<button type="button" class="category-chip' + (draft.has(item.code) ? ' selected' : '') + '" data-code="' + escapeHtml(item.code) + '">' +
+                    escapeHtml(item.zh) + '<small>' + escapeHtml(item.en) + '</small></button>').join('') +
+                '</div></section>';
+        });
+        body.innerHTML = html || '<div class="category-empty">没有匹配的分类</div>';
+        const count = $('#categoryCount');
+        if (count) count.textContent = '已选 ' + state.categoryDraft.length + ' / ' + state.categoryMax;
+    }
+
+    function toggleCategory(code) {
+        const index = state.categoryDraft.indexOf(code);
+        if (index >= 0) {
+            state.categoryDraft.splice(index, 1);
+        } else {
+            if (state.categoryDraft.length >= state.categoryMax) {
+                toast('最多选择 ' + state.categoryMax + ' 个细分类。', 'warn');
+                return;
+            }
+            state.categoryDraft.push(code);
+        }
+        renderCategoryPicker();
+    }
+
+    function toggleCategoryGroup(groupCode) {
+        const group = (state.categoryTree || []).find((node) => node.code === groupCode);
+        if (!group) return;
+        const codes = group.items.map((item) => item.code);
+        const allSelected = codes.every((code) => state.categoryDraft.includes(code));
+        if (allSelected) {
+            state.categoryDraft = state.categoryDraft.filter((code) => !codes.includes(code));
+        } else {
+            const merged = state.categoryDraft.slice();
+            codes.forEach((code) => { if (!merged.includes(code)) merged.push(code); });
+            if (merged.length > state.categoryMax) {
+                toast('选择数量超过上限 ' + state.categoryMax + '，请改为勾选具体细分类。', 'warn');
+                return;
+            }
+            state.categoryDraft = merged;
+        }
+        renderCategoryPicker();
+    }
+
+    function confirmCategoryPicker() {
+        if (state.categoryTarget === 'edit') {
+            state.editCategories = state.categoryDraft.slice();
+        } else {
+            state.newCategories = state.categoryDraft.slice();
+        }
+        refreshCategorySummary(state.categoryTarget);
+        closeModal('#categoryModal');
+    }
+
+    function bindCategoryPicker() {
+        $('#newCategoryBtn')?.addEventListener('click', () => openCategoryPicker('new'));
+        $('#editCategoryBtn')?.addEventListener('click', () => openCategoryPicker('edit'));
+        $('#categoryClose')?.addEventListener('click', () => closeModal('#categoryModal'));
+        $('#categoryCancel')?.addEventListener('click', () => closeModal('#categoryModal'));
+        $('#categoryConfirm')?.addEventListener('click', confirmCategoryPicker);
+        $('#categoryClear')?.addEventListener('click', () => {
+            state.categoryDraft = [];
+            renderCategoryPicker();
+        });
+        $('#categorySearch')?.addEventListener('input', renderCategoryPicker);
+        $('#categoryBody')?.addEventListener('click', (event) => {
+            const all = event.target.closest('[data-group-all]');
+            if (all) {
+                toggleCategoryGroup(all.getAttribute('data-group-all'));
+                return;
+            }
+            const chip = event.target.closest('[data-code]');
+            if (chip) toggleCategory(chip.getAttribute('data-code'));
+        });
+    }
+
     function openNewTask() {
         if (!state.config.apiBase || !state.config.apiKey) {
             toast('请先连接服务器。', 'warn');
             openSettings();
             return;
         }
+        state.newCategories = [];
+        refreshCategorySummary('new');
         $('#newTaskForm').reset();
         $('#keywordCountInput').value = '24';
-        $('#pagesTargetInput').value = '3';
+        $('#pagesTargetInput').value = '0';
         $('#marketInput').value = '全球';
         $$('.preset-buttons button').forEach((button) => {
             button.classList.toggle('active', button.getAttribute('data-preset') === 'standard');
@@ -1721,7 +1898,8 @@
             return;
         }
         const keywordCount = Math.max(6, Math.min(60, Number($('#keywordCountInput').value || 24)));
-        const pagesTarget = Math.max(1, Math.min(10, Number($('#pagesTargetInput').value || 3)));
+        const pagesRaw = String($('#pagesTargetInput').value || '').trim();
+        const pagesTarget = pagesRaw === '' ? 0 : Math.max(0, Math.min(30, Number(pagesRaw) || 0));
         button.disabled = true;
         button.textContent = '创建中…';
         try {
@@ -1733,6 +1911,7 @@
                     target_market: $('#marketInput').value || '全球',
                     keyword_count: keywordCount,
                     pages_target: pagesTarget,
+                    categories: state.newCategories.slice(),
                     language: 'en'
                 }
             });
@@ -1823,7 +2002,8 @@
         serp: '保留当前已生成的关键词，清空已抓域名与企业数据，从第 02 步重新抓取 Google 搜索结果。',
         classify: '保留当前所有已抓取的去重域名，清空历史 AI 筛选结论与企业数据，从第 03 步重新调用 AI 判断企业官网。',
         discover: '保留已通过 AI 筛选的企业域名，清空官网页面识别结果与企业联系方式，从第 04 步重新识别 About / Contact 页面。',
-        extract: '保留已识别完成的官网关键页面，清空已提取的企业名录，从第 05 步重新提取电话、邮箱与社媒。'
+        extract: '保留已识别完成的官网关键页面，清空已提取的企业名录，从第 05 步重新提取电话、邮箱与社媒。',
+        phone: '保留已提取的企业联系方式，只重新让 AI 整理电话：统一成可直接拨打的国际格式，并重新判断手机/座机。'
     };
 
     function updateRewindStageHint() {
@@ -1839,7 +2019,7 @@
             toast('请先选择一个任务。', 'warn');
             return;
         }
-        const validStages = ['keywords', 'serp', 'classify', 'discover', 'extract'];
+        const validStages = ['keywords', 'serp', 'classify', 'discover', 'extract', 'phone'];
         const currentStage = validStages.includes(task.stage) ? task.stage : 'classify';
         const targetStage = preselectedStage && validStages.includes(preselectedStage) ? preselectedStage : currentStage;
         if ($('#rewindStageSelect')) {
@@ -1855,8 +2035,11 @@
             $('#editKeywordCountInput').value = String(task.keyword_count || 24);
         }
         if ($('#editPagesTargetInput')) {
-            $('#editPagesTargetInput').value = String(task.pages_target || 3);
+            $('#editPagesTargetInput').value = String(Number(task.pages_target) || 0);
         }
+        state.editCategories = Array.isArray(task.categories) ? task.categories.slice() : [];
+        refreshCategorySummary('edit');
+        loadCategoryTree().then(() => refreshCategorySummary('edit')).catch(() => {});
         updateRewindStageHint();
         openModal('#rewindModal');
     }
@@ -1869,7 +2052,8 @@
         const city = $('#editCityInput') ? $('#editCityInput').value.trim() : task.city;
         const targetMarket = $('#editMarketInput') ? $('#editMarketInput').value : (task.target_market || '全球');
         const keywordCount = Math.max(6, Math.min(60, Number($('#editKeywordCountInput')?.value || task.keyword_count || 24)));
-        const pagesTarget = Math.max(1, Math.min(10, Number($('#editPagesTargetInput')?.value || task.pages_target || 3)));
+        const editPagesRaw = String($('#editPagesTargetInput')?.value ?? '').trim();
+        const pagesTarget = editPagesRaw === '' ? 0 : Math.max(0, Math.min(30, Number(editPagesRaw) || 0));
         if (!city) {
             toast('城市名称不能为空。', 'error');
             $('#editCityInput')?.focus();
@@ -1890,7 +2074,8 @@
                     city,
                     target_market: targetMarket,
                     keyword_count: keywordCount,
-                    pages_target: pagesTarget
+                    pages_target: pagesTarget,
+                    categories: state.editCategories.slice()
                 }
             });
             closeModal('#rewindModal');
@@ -2021,6 +2206,7 @@
         });
         $('#connectionPill')?.addEventListener('click', () => checkConnection(true));
 
+        bindCategoryPicker();
         $('#newTaskClose')?.addEventListener('click', () => closeModal('#newTaskModal'));
         $('#newTaskCancel')?.addEventListener('click', () => closeModal('#newTaskModal'));
         $('#newTaskSubmit')?.addEventListener('click', createTask);
@@ -2029,8 +2215,8 @@
             button.addEventListener('click', () => {
                 const presets = {
                     quick: { keywords: 12, pages: 2 },
-                    standard: { keywords: 24, pages: 3 },
-                    deep: { keywords: 40, pages: 5 }
+                    standard: { keywords: 24, pages: 0 },
+                    deep: { keywords: 40, pages: 0 }
                 };
                 const preset = presets[button.getAttribute('data-preset')] || presets.standard;
                 $('#keywordCountInput').value = String(preset.keywords);

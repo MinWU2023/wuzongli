@@ -343,8 +343,8 @@
                 </label>
             </div>
             <div class="field-row">
-                <label class="field"><span>每个关键词 Google 页数</span>
-                    <input id="pagesTargetInput" type="number" min="1" max="10" value="3">
+                <label class="field"><span>每个关键词 Google 页数（0 = 自动翻页）</span>
+                    <input id="pagesTargetInput" type="number" min="0" max="30" value="0">
                 </label>
                 <div class="field presets">
                     <span>快捷设置</span>
@@ -354,6 +354,14 @@
                         <button type="button" data-preset="deep">深度</button>
                     </div>
                 </div>
+            </div>
+            <div class="field category-field">
+                <span>产品分类（可选）</span>
+                <button class="category-trigger" id="newCategoryBtn" type="button">
+                    <span id="newCategorySummary">不选分类，仅按城市生成</span>
+                    <em>选择分类 ›</em>
+                </button>
+                <small>选择后，AI 会按「城市 + 产品分类」生成企业独立站和行业门户站搜索词；不选则仅根据城市生成。</small>
             </div>
             <div class="modal-notice">
                 <span>AI 正在使用的提示词</span>
@@ -385,6 +393,7 @@
                     <option value="classify">03 · AI 企业筛选（保留已抓取域名，重新调用 AI 筛选企业官网）</option>
                     <option value="discover">04 · 官网页面（保留已通过企业域名，重新抓取识别官网关键页）</option>
                     <option value="extract">05 · 联系方式（保留已识别的官网页面，重新提取企业名录与联系方式）</option>
+                    <option value="phone">06 · 电话标准化（保留已提取的联系方式，只重新让 AI 整理电话与判断手机/座机）</option>
                 </select>
                 <small id="rewindStageHint">将清理所选阶段及之后的数据，自动重算进度并立即从该阶段重新运行。</small>
             </label>
@@ -408,9 +417,17 @@
                 <label class="field"><span>关键词数量</span>
                     <input id="editKeywordCountInput" type="number" min="6" max="60" value="24">
                 </label>
-                <label class="field"><span>每个关键词 Google 页数</span>
-                    <input id="editPagesTargetInput" type="number" min="1" max="10" value="3">
+                <label class="field"><span>每个关键词 Google 页数（0 = 自动翻页）</span>
+                    <input id="editPagesTargetInput" type="number" min="0" max="30" value="0">
                 </label>
+            </div>
+            <div class="field category-field">
+                <span>产品分类（可选）</span>
+                <button class="category-trigger" id="editCategoryBtn" type="button">
+                    <span id="editCategorySummary">不选分类，仅按城市生成</span>
+                    <em>选择分类 ›</em>
+                </button>
+                <small>修改分类后，回退到「AI 关键词」阶段才会按新分类重新生成关键词。</small>
             </div>
         </form>
         <div class="modal-foot">
@@ -418,6 +435,28 @@
             <div class="foot-right">
                 <button class="btn ghost" id="rewindCancel" type="button">取消</button>
                 <button class="btn primary" id="rewindSubmit" type="button">确认回退并重新开始</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Category picker modal -->
+<div class="modal-backdrop" id="categoryModal" hidden>
+    <div class="modal modal-wide">
+        <div class="modal-head">
+            <div><span class="eyebrow accent">PRODUCT CATEGORIES</span><h2>选择产品分类</h2><p id="categoryStats">中国出海外贸产品分类（中英文），最多可选 12 个细分类。</p></div>
+            <button class="icon-btn" id="categoryClose" type="button" aria-label="关闭">✕</button>
+        </div>
+        <div class="category-toolbar">
+            <input id="categorySearch" type="search" placeholder="搜索中文或英文，如：沙发 / LED / sofa">
+            <span class="category-count" id="categoryCount">已选 0</span>
+        </div>
+        <div class="category-body" id="categoryBody"></div>
+        <div class="modal-foot">
+            <button class="btn ghost" id="categoryClear" type="button">清空（仅按城市）</button>
+            <div class="foot-right">
+                <button class="btn ghost" id="categoryCancel" type="button">取消</button>
+                <button class="btn primary" id="categoryConfirm" type="button">确定</button>
             </div>
         </div>
     </div>
