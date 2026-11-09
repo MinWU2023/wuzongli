@@ -65,12 +65,12 @@ final class Settings
         }
     }
 
-    public static function set(string $key, scalar|null $value): void
+    public static function set(string $key, string|int|float|bool|null $value): void
     {
         self::setMany([$key => $value]);
     }
 
-    /** @param array<string, scalar|null> $values */
+    /** @param array<string, string|int|float|bool|null> $values */
     public static function setMany(array $values): void
     {
         $db = Db::instance();
