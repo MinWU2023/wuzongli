@@ -5,16 +5,19 @@ namespace App\Core;
 
 final class Session
 {
+    /** Session cookie lifetime: 14 days. Each device keeps its own cookie/row. */
+    private const LIFETIME = 1209600;
+
     public static function start(): void
     {
         if (session_status() === PHP_SESSION_ACTIVE) {
             return;
         }
 
-        self::ensureSavePath();
+        self::configureHandler();
 
-        // Cookie path must be '/' (or end with '/'). Using APP_BASE_PATH without a
-        // trailing slash breaks cookies on many hosts and causes CSRF_MISMATCH on every POST.
+        // Prefer '/' so cookies survive host rewrite quirks. Subdirectory installs
+        // still get APP_BASE_PATH + trailing slash.
         $cookiePath = '/';
         if (defined('APP_BASE_PATH') && APP_BASE_PATH !== '') {
             $cookiePath = rtrim((string) APP_BASE_PATH, '/') . '/';
@@ -23,7 +26,7 @@ final class Session
         $secure = self::isHttps();
         session_name('gle_session');
         session_set_cookie_params([
-            'lifetime' => 0,
+            'lifetime' => self::LIFETIME,
             'path' => $cookiePath,
             'domain' => '',
             'secure' => $secure,
@@ -32,7 +35,26 @@ final class Session
         ]);
         ini_set('session.use_strict_mode', '1');
         ini_set('session.use_only_cookies', '1');
+        ini_set('session.cookie_lifetime', (string) self::LIFETIME);
+        ini_set('session.gc_maxlifetime', (string) self::LIFETIME);
         session_start();
+    }
+
+    /**
+     * Prefer MySQL sessions when DB is ready; fall back to files.
+     * File sessions on free hosts are a common source of permanent 419 on login.
+     */
+    private static function configureHandler(): void
+    {
+        try {
+            Db::instance();
+            $handler = new DatabaseSessionHandler(self::LIFETIME);
+            session_set_save_handler($handler, true);
+            return;
+        } catch (\Throwable) {
+            // Database not ready (install) — use files.
+        }
+        self::ensureSavePath();
     }
 
     private static function ensureSavePath(): void
@@ -61,10 +83,21 @@ final class Session
         if ((string) ($_SERVER['SERVER_PORT'] ?? '') === '443') {
             return true;
         }
-        // Prefer app.url when proxy headers are missing (common on free hosts).
-        $appUrl = (string) (function_exists('config') ? config('app.url', '') : '');
-        if ($appUrl !== '' && str_starts_with(strtolower($appUrl), 'https://')) {
-            return true;
+
+        // Free hosts often strip HTTPS indicators. Trust app.url only for
+        // non-local hosts — forcing Secure on http://localhost drops the cookie
+        // and every POST becomes CSRF 419.
+        $host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
+        $hostOnly = explode(':', $host)[0];
+        $isLocal = $hostOnly === 'localhost'
+            || $hostOnly === '127.0.0.1'
+            || str_ends_with($hostOnly, '.local')
+            || str_ends_with($hostOnly, '.test');
+        if (!$isLocal) {
+            $appUrl = (string) (function_exists('config') ? config('app.url', '') : '');
+            if ($appUrl !== '' && str_starts_with(strtolower($appUrl), 'https://')) {
+                return true;
+            }
         }
         return false;
     }
@@ -94,6 +127,7 @@ final class Session
     public static function regenerate(): void
     {
         if (session_status() === PHP_SESSION_ACTIVE) {
+            // Only rotates THIS device's session id. Other devices keep theirs.
             session_regenerate_id(true);
         }
     }

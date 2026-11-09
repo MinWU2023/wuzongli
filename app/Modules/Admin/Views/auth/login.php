@@ -73,7 +73,7 @@ $messages = flashes();
 
             <div class="login-help">
                 <span>安全提示</span>
-                <p>连续 6 次失败会锁定 5 分钟。请勿在公共电脑保存密码。</p>
+                <p>支持多设备同时登录。连续 6 次失败会锁定 5 分钟。请勿在公共电脑保存密码。</p>
             </div>
         </div>
         <div class="login-form-foot">© <?= date('Y') ?> 外贸客 · 仅供合法合规的 B2B 线索研究</div>

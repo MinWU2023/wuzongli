@@ -848,12 +848,14 @@ final class PipelineService
             }
             Db::instance()->ensureConnected();
             $this->tasks->setError($taskId, null);
-            $this->tasks->log($taskId, 'discover', 'success', sprintf(
-                '已识别 %s 的关键页面（About: %s / Contact: %s）',
+            $fallbackNote = !empty($result['ai_fallback']) ? '（AI 超时，已用规则识别）' : '';
+            $this->tasks->log($taskId, 'discover', !empty($result['ai_fallback']) ? 'warning' : 'success', sprintf(
+                '已识别 %s 的关键页面（About: %s / Contact: %s）%s',
                 $website['domain'],
                 $result['about'] ? '有' : '无',
-                $result['contact'] ? '有' : '无'
-            ), ['website_id' => $websiteId, 'pages' => $result['pages']]);
+                $result['contact'] ? '有' : '无',
+                $fallbackNote
+            ), ['website_id' => $websiteId, 'pages' => $result['pages'], 'ai_fallback' => !empty($result['ai_fallback'])]);
             $counts = $this->tasks->counts($taskId);
             $this->tasks->refresh($this->tasks->find($taskId), $counts);
             return $result + ['counts' => $counts];
@@ -907,16 +909,19 @@ final class PipelineService
             }
             Db::instance()->ensureConnected();
             $this->tasks->setError($taskId, null);
-            $this->tasks->log($taskId, 'extract', 'success', sprintf(
-                '已提取 %s 的企业信息：公司名%s，电话%s，LinkedIn%s',
+            $fallback = !empty($company['ai_fallback']);
+            $this->tasks->log($taskId, 'extract', $fallback ? 'warning' : 'success', sprintf(
+                '已提取 %s 的企业信息：公司名%s，电话%s，LinkedIn%s%s',
                 $website['domain'],
                 $company['company_name'] ? '有' : '无',
                 $company['phone'] ? '有' : '无',
-                $company['linkedin'] ? '有' : '无'
+                $company['linkedin'] ? '有' : '无',
+                $fallback ? '（AI 超时，已用规则提取）' : ''
             ), [
                 'website_id' => $websiteId,
                 'company_id' => $company['id'] ?? null,
                 'phone' => $company['phone'] ?? null,
+                'ai_fallback' => $fallback,
             ]);
             $counts = $this->tasks->counts($taskId);
             $this->tasks->refresh($this->tasks->find($taskId), $counts);
@@ -1061,6 +1066,50 @@ final class PipelineService
         }
     }
 
+    /**
+     * Soft-fail a website crawl/extract step from the extension when HTML cannot be fetched.
+     * After max attempts the row is marked error so the pipeline advances.
+     *
+     * @return array{skipped:bool,attempts:int,max_attempts:int,page_status:string,extract_status:string}
+     */
+    public function failWebsite(int $taskId, int $websiteId, string $stage, string $message): array
+    {
+        $task = $this->tasks->find($taskId);
+        $this->assertRunnable($task);
+        $website = Db::instance()->table('websites')->where('id', $websiteId)->where('task_id', $taskId)->first();
+        if ($website === null) {
+            throw HttpException::notFound('网站不存在');
+        }
+        $statusColumn = $stage === 'extract' ? 'extract_status' : 'page_status';
+        $logStage = $stage === 'extract' ? 'extract' : 'discover';
+        if ((string) $website[$statusColumn] === 'done' || (string) $website[$statusColumn] === 'error') {
+            return [
+                'skipped' => (string) $website[$statusColumn] === 'error',
+                'attempts' => (int) $website['attempts'],
+                'max_attempts' => $this->maxAttempts(),
+                'page_status' => (string) $website['page_status'],
+                'extract_status' => (string) $website['extract_status'],
+                'already_done' => true,
+            ];
+        }
+        $this->websiteFailure($taskId, $website, $statusColumn, $message !== '' ? $message : '抓取失败', $logStage);
+        $fresh = Db::instance()->table('websites')->where('id', $websiteId)->first() ?? $website;
+        $skipped = (string) $fresh[$statusColumn] === 'error';
+        if ($skipped) {
+            $this->tasks->setError($taskId, null);
+            $counts = $this->tasks->counts($taskId);
+            $this->tasks->refresh($this->tasks->find($taskId), $counts);
+        }
+        return [
+            'skipped' => $skipped,
+            'attempts' => (int) $fresh['attempts'],
+            'max_attempts' => $this->maxAttempts(),
+            'page_status' => (string) $fresh['page_status'],
+            'extract_status' => (string) $fresh['extract_status'],
+            'already_done' => false,
+        ];
+    }
+
     private function websiteFailure(int $taskId, array $website, string $statusColumn, string $message, string $stage): void
     {
         $attempts = (int) $website['attempts'] + 1;
@@ -1075,7 +1124,7 @@ final class PipelineService
             $data[$statusColumn] = 'error';
         }
         Db::instance()->update('websites', $data, ['id' => (int) $website['id']]);
-        $this->tasks->setError($taskId, $message);
+        $this->tasks->setError($taskId, $terminal ? null : $message);
         $this->tasks->log(
             $taskId,
             $stage,

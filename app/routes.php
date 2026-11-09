@@ -10,6 +10,9 @@ use App\Core\Router;
 
 /** @var Router $router */
 
+// Host bridge HTML for InfinityFree aes.js (extension + mobile WebView)
+$router->get('/bridge', 'Api/Bridge@index');
+
 // ---------------------------------------------------------------------------
 // API v1 (called by the Chrome extension; X-API-Key required except health)
 // ---------------------------------------------------------------------------
@@ -36,6 +39,7 @@ $router->post('/api/tasks/{id}/classify', 'Api/Task@classify');
 $router->post('/api/tasks/{id}/phones/normalize', 'Api/Task@normalizePhones');
 $router->post('/api/tasks/{id}/websites/{websiteId}/pages', 'Api/Task@pages');
 $router->post('/api/tasks/{id}/websites/{websiteId}/extract', 'Api/Task@extract');
+$router->post('/api/tasks/{id}/websites/{websiteId}/fail', 'Api/Task@failWebsite');
 $router->post('/api/tasks/{id}/pause', 'Api/Task@pause');
 $router->post('/api/tasks/{id}/resume', 'Api/Task@resume');
 $router->post('/api/tasks/{id}/retry', 'Api/Task@retry');

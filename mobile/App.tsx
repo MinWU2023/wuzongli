@@ -12,6 +12,7 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { HostApiWebView } from './src/components/HostApiWebView';
+import { warmHost } from './src/hostApi';
 import { CompaniesScreen } from './src/screens/CompaniesScreen';
 import { DialScreen } from './src/screens/DialScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
@@ -94,6 +95,15 @@ export default function App() {
     await saveConfig(next);
     setConfig(next);
   };
+
+  // Pre-warm InfinityFree /bridge as soon as API base is known.
+  useEffect(() => {
+    const base = String(config?.apiBase || '').trim();
+    if (!base) return;
+    warmHost(base).catch(() => {
+      // First API call will retry warm.
+    });
+  }, [config?.apiBase]);
 
   const fontsReady = fontsLoaded || !!fontError || fontWaitTimedOut;
   const booting = !fontsReady || !config;

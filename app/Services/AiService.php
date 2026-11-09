@@ -224,7 +224,8 @@ final class AiService
                 'Accept: application/json',
             ],
             CURLOPT_POSTFIELDS => json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-            CURLOPT_CONNECTTIMEOUT => min(15, $timeout),
+            // Keep connect short so a dead relay fails over / falls back quickly (error text often shows ~15s).
+            CURLOPT_CONNECTTIMEOUT => min(12, max(5, $timeout)),
             CURLOPT_TIMEOUT => $timeout,
             CURLOPT_SSL_VERIFYPEER => (bool) config('app.ai_ssl_verify', true),
             CURLOPT_SSL_VERIFYHOST => config('app.ai_ssl_verify', true) ? 2 : 0,

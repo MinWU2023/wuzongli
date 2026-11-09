@@ -10,7 +10,8 @@
 | PHP 扩展 | `pdo_mysql`、`curl`、`dom`、`mbstring`、`openssl`、`json` | 安装页「环境检查」标红 |
 | MySQL | 8.0+，`utf8mb4` | 8.0 以下部分 SQL 不兼容 |
 | 伪静态 | Apache `mod_rewrite` 或 Nginx `try_files` | `/admin`、`/api` 全部 404 |
-| 可写目录 | `config/`、`storage/`（含 `storage/sessions/`）可写 | 无法生成配置、写锁/日志；登录会一直 419 CSRF |
+| 可写目录 | `config/`、`storage/` 可写 | 无法生成配置、写锁/日志 |
+| MySQL 会话表 | 部署后执行迁移，生成 `gl_sessions`（也可由登录时自动建表） | 文件 Session 在免费主机上易丢失，登录会 419；多设备各自独立会话行 |
 | 出站网络 | 服务器可 HTTPS 访问 AI 中转站 | 关键词、筛选、提取全部失败 |
 
 免费空间常见限制：
@@ -161,8 +162,16 @@ Key 前后有空格、复制不完整、或在后台轮换过。重新复制。
 **API 返回 404**  
 伪静态未生效，或 API 地址填成了 `https://域名/api`。应填站点根地址。
 
-**插件提示非 JSON，响应含 `aes.js`**  
-InfinityFree（含 `ftpupload.net`）免费空间会对所有请求做 JS Cookie 校验，Chrome 插件直连 API 常被拦成 HTML。插件会自动开一次标签页尝试过检；校验轮换后仍可能失败。商务使用请换付费/无此校验的主机。
+**插件 / App 提示非 JSON，响应含 `aes.js`**
+InfinityFree（含 iceiy / ftpupload 等）免费空间会对**所有 URL**做 JS Cookie 校验，无法按路径关闭。原生 `fetch`、curl、普通 App HTTP 请求都会收到含 `/aes.js` 的 HTML，PHP 根本不会执行。
+
+本项目的处理方式：
+1. 服务端提供同域页面 `GET /bridge`（部署后浏览器打开应看到 `bridge ready`）。
+2. Chrome 插件在后台打开隐藏 `/bridge` 标签，等页面证明 `/api/health` 返回 JSON 后，用页内 `fetch`（带 `__test` Cookie）调 API。
+3. 手机 App 用隐藏 WebView 加载同一 `/bridge`，同样在页内发请求。
+4. Cookie 参数会轮换：桥接页会定期自检，失败则自动刷新重试。
+
+请确认已上传含 `/bridge` 的最新代码，并重新加载插件 / 重装 App。若仍失败，免费空间无法从服务端关闭该校验，只能换付费或无 aes.js 的主机。
 
 **AI 超时 / 插件显示「服务器开小差了」**  
 InfinityFree 等免费空间 PHP 执行上限约 60 秒且无法调高。关键词生成若多次调用 AI 会直接被掐断。后台把中转站超时设为 **35–45 秒**，关键词数量先用 **12**，换更快模型；仍失败请换付费主机。

@@ -7,25 +7,47 @@ type Props = {
   enabled?: boolean;
 };
 
+type WarmWaiter = {
+  resolve: () => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 /**
- * Hidden WebView: pass InfinityFree aes.js, then run API fetch with first-party cookies.
+ * Hidden WebView loads /bridge, passes InfinityFree aes.js, then proxies API
+ * calls with first-party cookies via window.__GLE_BRIDGE__.
  */
 export function HostApiWebView({ enabled = true }: Props) {
   const ref = useRef<WebView>(null);
   const [uri, setUri] = useState('about:blank');
   const readyRef = useRef(false);
   const currentBase = useRef('');
-  const warmWaiters = useRef<Array<() => void>>([]);
+  const warmWaiters = useRef<WarmWaiter[]>([]);
+  const loadGeneration = useRef(0);
 
-  const flushWarm = () => {
+  const clearWarmWaiters = (error?: Error) => {
     const list = warmWaiters.current.splice(0);
-    list.forEach((fn) => {
+    list.forEach((item) => {
+      clearTimeout(item.timer);
       try {
-        fn();
+        if (error) item.reject(error);
+        else item.resolve();
       } catch {
         // ignore
       }
     });
+  };
+
+  const markReady = () => {
+    readyRef.current = true;
+    clearWarmWaiters();
+  };
+
+  const reloadBridge = (base: string) => {
+    readyRef.current = false;
+    currentBase.current = base;
+    loadGeneration.current += 1;
+    setUri(base.replace(/\/+$/, '') + '/bridge?_=' + Date.now());
   };
 
   useEffect(() => {
@@ -36,21 +58,26 @@ export function HostApiWebView({ enabled = true }: Props) {
 
     registerHostBridge({
       warm: (baseUrl: string) =>
-        new Promise<void>((resolve) => {
+        new Promise<void>((resolve, reject) => {
           const base = baseUrl.replace(/\/+$/, '');
-          const warmUrl = base + '/admin/login';
-          warmWaiters.current.push(resolve);
+          const timer = setTimeout(() => {
+            const idx = warmWaiters.current.findIndex((w) => w.resolve === resolve);
+            if (idx >= 0) warmWaiters.current.splice(idx, 1);
+            if (readyRef.current && currentBase.current === base) resolve();
+            else reject(new Error('主机桥接预热超时，请确认已部署 /bridge 页面'));
+          }, 28000);
+
+          warmWaiters.current.push({ resolve, reject, timer });
 
           if (currentBase.current === base && readyRef.current) {
-            setTimeout(flushWarm, 350);
+            clearTimeout(timer);
+            const idx = warmWaiters.current.findIndex((w) => w.resolve === resolve);
+            if (idx >= 0) warmWaiters.current.splice(idx, 1);
+            resolve();
             return;
           }
 
-          currentBase.current = base;
-          readyRef.current = false;
-          setUri(warmUrl);
-          // Safety: never block forever if onLoadEnd never fires
-          setTimeout(flushWarm, 16000);
+          reloadBridge(base);
         }),
 
       fetch: (req) =>
@@ -62,57 +89,83 @@ export function HostApiWebView({ enabled = true }: Props) {
           }
 
           const script = `
-            (async function() {
-              var id = ${JSON.stringify(req.id)};
+            (function() {
               try {
-                var controller = new AbortController();
-                var timer = setTimeout(function() { controller.abort(); }, ${Number(req.timeout) || 35000});
-                var init = {
-                  method: ${JSON.stringify(req.method)},
-                  headers: ${JSON.stringify(req.headers || {})},
-                  credentials: 'include',
-                  cache: 'no-store',
-                  signal: controller.signal
-                };
-                var body = ${JSON.stringify(req.body)};
-                if (body !== null && init.method !== 'GET' && init.method !== 'HEAD') {
-                  init.body = body;
+                var bridge = window.__GLE_BRIDGE__;
+                if (!bridge || typeof bridge.requestFromNative !== 'function') {
+                  window.ReactNativeWebView.postMessage(JSON.stringify({
+                    id: ${JSON.stringify(req.id)},
+                    status: 0,
+                    text: '',
+                    error: 'bridge_missing'
+                  }));
+                  return true;
                 }
-                var response = await fetch(${JSON.stringify(req.url)}, init);
-                var text = await response.text();
-                clearTimeout(timer);
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  id: id, status: response.status, text: text
-                }));
+                bridge.requestFromNative(${JSON.stringify({
+                  id: req.id,
+                  url: req.url,
+                  method: req.method,
+                  headers: req.headers || {},
+                  body: req.body,
+                  timeout: req.timeout,
+                })});
               } catch (e) {
                 window.ReactNativeWebView.postMessage(JSON.stringify({
-                  id: id, status: 0, text: '',
-                  error: (e && e.name === 'AbortError') ? '请求超时' : String((e && e.message) || e)
+                  id: ${JSON.stringify(req.id)},
+                  status: 0,
+                  text: '',
+                  error: String((e && e.message) || e)
                 }));
               }
+              return true;
             })();
             true;
           `;
 
-          setTimeout(() => {
+          const kick = () => {
             try {
               web.injectJavaScript(script);
-              // Inject queued OK — real result arrives via onMessage → resolveHostResult
+              // Result arrives asynchronously via onMessage → resolveHostResult.
               resolve({ id: req.id });
             } catch (err) {
               reject(err);
             }
-          }, readyRef.current ? 60 : 900);
+          };
+
+          if (readyRef.current) {
+            setTimeout(kick, 40);
+          } else {
+            setTimeout(kick, 1200);
+          }
         }),
+
+      reload: (baseUrl: string) => {
+        reloadBridge(baseUrl.replace(/\/+$/, ''));
+      },
     });
 
-    return () => registerHostBridge(null);
+    return () => {
+      clearWarmWaiters(new Error('主机桥接已卸载'));
+      registerHostBridge(null);
+    };
   }, [enabled]);
 
   const onMessage = (event: WebViewMessageEvent) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
-      if (data && data.id) resolveHostResult(data);
+      if (!data || typeof data !== 'object') return;
+
+      if (data.type === 'BRIDGE_READY') {
+        markReady();
+        return;
+      }
+      if (data.type === 'BRIDGE_RELOADING') {
+        readyRef.current = false;
+        return;
+      }
+      if (data.type === 'BRIDGE_RESULT' || data.id) {
+        resolveHostResult(data);
+      }
     } catch {
       // ignore
     }
@@ -126,9 +179,25 @@ export function HostApiWebView({ enabled = true }: Props) {
         ref={ref}
         source={{ uri }}
         onLoadEnd={() => {
-          readyRef.current = true;
-          // Give aes.js time to set __test cookie then finish warm
-          setTimeout(flushWarm, 1400);
+          // Bridge script posts BRIDGE_READY after /api/health proves JSON.
+          // Fallback: if page loaded but message missed, poke prove().
+          setTimeout(() => {
+            if (readyRef.current) return;
+            try {
+              ref.current?.injectJavaScript(`
+                (function(){
+                  try {
+                    if (window.__GLE_BRIDGE__ && window.__GLE_BRIDGE__.prove) {
+                      window.__GLE_BRIDGE__.prove();
+                    }
+                  } catch (e) {}
+                  true;
+                })();
+              `);
+            } catch {
+              // ignore
+            }
+          }, 1600);
         }}
         onMessage={onMessage}
         javaScriptEnabled
@@ -137,6 +206,8 @@ export function HostApiWebView({ enabled = true }: Props) {
         sharedCookiesEnabled
         setSupportMultipleWindows={false}
         originWhitelist={['*']}
+        cacheEnabled={false}
+        incognito={false}
       />
     </View>
   );

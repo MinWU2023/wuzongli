@@ -330,6 +330,21 @@ final class TaskController extends ApiController
         $this->ok($this->pipeline->extractWebsite($taskId, $wid, $pages));
     }
 
+    public function failWebsite(string $id, string $websiteId): never
+    {
+        $taskId = $this->taskId($id);
+        $wid = (int) $websiteId;
+        if ($wid <= 0) {
+            throw HttpException::notFound('网站不存在');
+        }
+        $stage = $this->request->string('stage', 'discover');
+        if (!in_array($stage, ['discover', 'extract'], true)) {
+            $stage = 'discover';
+        }
+        $message = $this->request->string('message', '网页抓取失败');
+        $this->ok($this->pipeline->failWebsite($taskId, $wid, $stage, $message));
+    }
+
     public function update(string $id): never
     {
         $taskId = $this->taskId($id);

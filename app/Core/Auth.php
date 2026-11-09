@@ -39,6 +39,7 @@ final class Auth
         if ($user === null || !password_verify($password, (string) $user['password_hash'])) {
             return false;
         }
+        // Rotate only this device's session. Other devices keep independent rows.
         Session::regenerate();
         Session::put('admin_id', (int) $user['id']);
         Session::forget('login_attempts');

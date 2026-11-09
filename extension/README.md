@@ -137,7 +137,7 @@ node --check extension/background.js
 确认 `background.js` 无报错：`chrome://extensions/` → 插件「Service Worker」→ 检查控制台。若已有窗口被最小化，再次点击会聚焦。
 
 **提示「非 JSON 内容」**  
-浏览器打开 `https://域名/api/health` 应返回 JSON。若页面源码含 `aes.js`，是主机浏览器校验拦截了插件请求（InfinityFree 常见）；换主机，或依赖插件自动过检后再试。
+浏览器打开 `https://域名/api/health` 应返回 JSON；`https://域名/bridge` 应显示 `bridge ready`。若直连 API 源码含 `aes.js`，属 InfinityFree 校验；插件会自动用 `/bridge` 标签页过检后请求。请使用 v1.0.3+ 插件并确保服务端已部署 bridge 页。
 
 **提示「缺少 Key」/ 401**  
 设置里重新粘贴 API Key；注意不要带空格。后台轮换 Key 后旧 Key 立即失效。

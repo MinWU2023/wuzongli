@@ -1,7 +1,7 @@
 /**
  * InfinityFree / similar free hosts inject aes.js and block native fetch.
- * We warm cookies in a hidden WebView, then run API calls inside that WebView
- * (first-party cookies), mirroring the Chrome extension HOST_API_FETCH flow.
+ * We warm cookies via a hidden WebView on /bridge, then run API calls inside
+ * that WebView (first-party cookies), mirroring the Chrome extension flow.
  */
 
 type HostFetchRequest = {
@@ -18,6 +18,7 @@ type HostFetchResult = {
   status?: number;
   text?: string;
   error?: string;
+  type?: string;
 };
 
 type Pending = {
@@ -29,15 +30,26 @@ type Pending = {
 export type HostBridgeHandlers = {
   warm: (baseUrl: string) => Promise<void>;
   fetch: (req: HostFetchRequest) => Promise<HostFetchResult>;
+  reload?: (baseUrl: string) => void;
 };
 
 let bridge: HostBridgeHandlers | null = null;
 const pending = new Map<string, Pending>();
 let warmPromise: Promise<void> | null = null;
 let lastWarmBase = '';
+/** Sticky: once aes.js is seen, skip native fetch and always use WebView bridge. */
+let forceBridge = false;
 
 export function registerHostBridge(handlers: HostBridgeHandlers | null) {
   bridge = handlers;
+}
+
+export function setForceHostBridge(value: boolean) {
+  forceBridge = !!value;
+}
+
+export function shouldForceHostBridge(): boolean {
+  return forceBridge;
 }
 
 export function isSecurityChallengeHtml(text: string | null | undefined): boolean {
@@ -48,13 +60,14 @@ export function isSecurityChallengeHtml(text: string | null | undefined): boolea
     sample.includes('function tonumber') ||
     sample.includes('this site requires javascript') ||
     sample.includes('checking your browser') ||
-    (sample.includes('__test') && sample.includes('document.cookie')) ||
-    (sample.includes('<html') && !sample.trimStart().startsWith('{'))
+    (sample.includes('__test') && sample.includes('document.cookie'))
   );
 }
 
 export function looksLikeJson(text: string): boolean {
-  const t = text.trim();
+  const t = String(text || '')
+    .replace(/^\uFEFF/, '')
+    .trim();
   return t.startsWith('{') || t.startsWith('[');
 }
 
@@ -63,7 +76,6 @@ export function browserHeaders(extra: Record<string, string> = {}): Record<strin
     Accept: 'application/json, text/plain, */*',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     'X-Requested-With': 'XMLHttpRequest',
-    // InfinityFree often blocks empty / non-browser UAs from native clients
     'User-Agent':
       'Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
     ...extra,
@@ -91,9 +103,19 @@ export async function warmHost(baseUrl: string): Promise<void> {
   lastWarmBase = base;
   warmPromise = bridge.warm(base).catch((err) => {
     warmPromise = null;
+    lastWarmBase = '';
     throw err;
   });
   return warmPromise;
+}
+
+export function reloadHostBridge(baseUrl: string) {
+  const base = String(baseUrl || '')
+    .trim()
+    .replace(/\/+$/, '');
+  warmPromise = null;
+  lastWarmBase = '';
+  bridge?.reload?.(base);
 }
 
 export async function hostApiFetch(options: {
@@ -105,7 +127,7 @@ export async function hostApiFetch(options: {
   timeout?: number;
 }): Promise<{ status: number; text: string }> {
   if (!bridge) {
-    throw new Error('主机安全桥接未就绪');
+    throw new Error('主机安全桥接未就绪（WebView 未挂载）');
   }
   const base = String(options.base || '')
     .trim()
@@ -113,32 +135,60 @@ export async function hostApiFetch(options: {
   const path = String(options.path || '');
   await warmHost(base);
 
-  const id = newId();
-  const timeout = Math.max(8000, Math.min(90000, options.timeout || 35000));
-  const result = await new Promise<HostFetchResult>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(new Error('主机桥接请求超时'));
-    }, timeout + 5000);
-    pending.set(id, { resolve, reject, timer });
-    bridge!
-      .fetch({
-        id,
-        url: base + path,
-        method: (options.method || 'GET').toUpperCase(),
-        headers: options.headers || {},
-        body: options.body ?? null,
-        timeout,
-      })
-      .catch((err) => {
-        clearTimeout(timer);
+  const run = async (): Promise<HostFetchResult> => {
+    const id = newId();
+    const timeout = Math.max(8000, Math.min(90000, options.timeout || 35000));
+    return new Promise<HostFetchResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
         pending.delete(id);
-        reject(err);
-      });
-  });
+        reject(new Error('主机桥接请求超时'));
+      }, timeout + 8000);
+      pending.set(id, { resolve, reject, timer });
+      bridge!
+        .fetch({
+          id,
+          url: base + path,
+          method: (options.method || 'GET').toUpperCase(),
+          headers: options.headers || {},
+          body: options.body ?? null,
+          timeout,
+        })
+        .catch((err) => {
+          clearTimeout(timer);
+          pending.delete(id);
+          reject(err);
+        });
+    });
+  };
 
-  if (result.error) {
-    throw new Error(result.error);
+  let result = await run();
+
+  const challenge =
+    !!result.error &&
+    (result.error === 'host_security_challenge' ||
+      result.error === 'host_bridge_not_ready' ||
+      result.error === 'bridge_missing' ||
+      isSecurityChallengeHtml(result.text));
+
+  if (challenge) {
+    forceBridge = true;
+    reloadHostBridge(base);
+    await warmHost(base);
+    result = await run();
   }
+
+  if (result.error && !result.text) {
+    throw new Error(
+      result.error === 'host_security_challenge'
+        ? '主机安全校验仍未通过，请稍后重试'
+        : result.error
+    );
+  }
+  if (isSecurityChallengeHtml(result.text)) {
+    forceBridge = true;
+    throw new Error('主机开启了浏览器安全校验（InfinityFree），桥接重试后仍失败');
+  }
+
+  forceBridge = true;
   return { status: result.status || 0, text: result.text || '' };
 }

@@ -16,6 +16,12 @@ final class AuthController extends Controller
         if (Auth::check()) {
             $this->redirect('/admin');
         }
+        if (!headers_sent()) {
+            header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+            header('Pragma: no-cache');
+        }
+        // Ensure a fresh CSRF token is bound to this device's session before render.
+        Csrf::token();
         View::display('Admin::auth/login', [
             'version' => APP_VERSION,
             'attempts' => (int) Session::get('login_attempts', 0),
@@ -24,7 +30,14 @@ final class AuthController extends Controller
 
     public function login(): never
     {
-        Csrf::assert($this->request->string('_token'));
+        // Soft-fail CSRF: redirect instead of hard 419 so multi-tab / expired
+        // pages recover by reloading the form on the same device.
+        if (!Csrf::verify($this->request->string('_token'))) {
+            Session::forget('_csrf_token');
+            Csrf::token();
+            flash('error', '登录页已过期，请重新输入账号密码再试（支持多设备同时登录）。');
+            $this->redirect('/admin/login');
+        }
         $attempts = (int) Session::get('login_attempts', 0);
         $lastAttempt = (int) Session::get('login_last_attempt', 0);
         if ($attempts >= 6 && time() - $lastAttempt < 300) {
@@ -51,9 +64,12 @@ final class AuthController extends Controller
 
     public function logout(): never
     {
-        Csrf::assert($this->request->string('_token'));
+        if (!Csrf::verify($this->request->string('_token'))) {
+            flash('error', '页面已过期，请再试一次退出。');
+            $this->redirect('/admin');
+        }
         Auth::logout();
-        flash('success', '已安全退出。');
+        flash('success', '已安全退出（仅退出当前设备）。');
         $this->redirect('/admin/login');
     }
 }

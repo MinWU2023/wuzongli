@@ -99,15 +99,16 @@ async function handleMessage(message) {
     }
 }
 
-/** Persistent hidden tab on the API origin — required for InfinityFree aes.js cookies. */
+/** Persistent hidden tab on /bridge — required for InfinityFree aes.js cookies. */
 let hostApiTabId = null;
 
 function isSecurityChallengeHtml(text) {
     if (!text || typeof text !== 'string') return false;
-    const sample = text.slice(0, 3000).toLowerCase();
+    const sample = text.slice(0, 4000).toLowerCase();
     return sample.includes('/aes.js')
         || sample.includes('function tonumber')
         || sample.includes('this site requires javascript')
+        || sample.includes('checking your browser')
         || (sample.includes('__test') && sample.includes('document.cookie'));
 }
 
@@ -115,27 +116,31 @@ function normalizeApiBase(url) {
     return String(url || '').trim().replace(/\/+$/, '');
 }
 
+function bridgeUrl(base) {
+    return normalizeApiBase(base) + '/bridge?_=' + Date.now();
+}
+
 /**
- * Open / keep a background tab on the API host so the JS cookie check can run.
- * Prefer an HTML page (admin login) over /api/health so the document stays normal.
+ * Open / keep a background tab on /bridge so InfinityFree JS cookie checks pass,
+ * then prove /api/health returns JSON before API calls.
  */
-async function ensureHostApiTab(baseUrl) {
+async function ensureHostApiTab(baseUrl, forceReload = false) {
     const base = normalizeApiBase(baseUrl);
     assertHttpUrl(base);
     const origin = new URL(base).origin;
-    const warmUrl = base + '/admin/login';
+    const warmUrl = bridgeUrl(base);
 
-    if (typeof hostApiTabId === 'number') {
+    if (!forceReload && typeof hostApiTabId === 'number') {
         try {
             const existing = await chrome.tabs.get(hostApiTabId);
             if (existing && typeof existing.id === 'number') {
                 const tabUrl = String(existing.url || '');
-                if (tabUrl.startsWith(origin) || tabUrl === '' || tabUrl === 'about:blank') {
-                    if (!tabUrl.startsWith(origin)) {
-                        await chrome.tabs.update(hostApiTabId, { url: warmUrl });
-                        await waitForTab(hostApiTabId, 20000);
-                        await sleep(1600);
-                    }
+                if (tabUrl.startsWith(origin)) {
+                    const ready = await waitBridgeReady(hostApiTabId, 12000);
+                    if (ready) return hostApiTabId;
+                    await chrome.tabs.update(hostApiTabId, { url: warmUrl });
+                    await waitForTab(hostApiTabId, 25000);
+                    await waitBridgeReady(hostApiTabId, 25000);
                     return hostApiTabId;
                 }
             }
@@ -144,36 +149,70 @@ async function ensureHostApiTab(baseUrl) {
         }
     }
 
+    if (forceReload && typeof hostApiTabId === 'number') {
+        try {
+            await chrome.tabs.update(hostApiTabId, { url: warmUrl });
+            await waitForTab(hostApiTabId, 25000);
+            await waitBridgeReady(hostApiTabId, 25000);
+            return hostApiTabId;
+        } catch (error) {
+            try { await closeTabQuietly(hostApiTabId); } catch (e) {}
+            hostApiTabId = null;
+        }
+    }
+
     const created = await backgroundTab(warmUrl);
     if (typeof created.id !== 'number') {
-        throw new Error('无法打开站点标签页以通过主机安全校验');
+        throw new Error('无法打开 /bridge 标签页以通过主机安全校验');
     }
     hostApiTabId = created.id;
-    await waitForTab(hostApiTabId, 20000);
-    // Challenge pages often redirect once after setting __test.
-    await sleep(1600);
-    try {
-        await waitForTab(hostApiTabId, 8000);
-    } catch (error) {
-        // Already complete.
+    await waitForTab(hostApiTabId, 25000);
+    const ok = await waitBridgeReady(hostApiTabId, 28000);
+    if (!ok) {
+        throw new Error('主机安全校验未通过：/bridge 未能访问 /api/health');
     }
-    await sleep(500);
     return hostApiTabId;
 }
 
+async function waitBridgeReady(tabId, timeoutMs) {
+    const deadline = Date.now() + Math.max(3000, timeoutMs || 20000);
+    while (Date.now() < deadline) {
+        try {
+            const injection = await chrome.scripting.executeScript({
+                target: { tabId },
+                world: 'MAIN',
+                func: async () => {
+                    const bridge = window.__GLE_BRIDGE__;
+                    if (!bridge) return { ready: false, reason: 'no_bridge' };
+                    if (bridge.isReady && bridge.isReady()) return { ready: true };
+                    if (typeof bridge.prove === 'function') {
+                        const ok = await bridge.prove();
+                        return { ready: !!ok };
+                    }
+                    return { ready: false, reason: 'not_ready' };
+                }
+            });
+            const result = injection && injection[0] ? injection[0].result : null;
+            if (result && result.ready) return true;
+        } catch (error) {
+            // Tab may still be on aes.js interstitial.
+        }
+        await sleep(700);
+    }
+    return false;
+}
+
 /**
- * Open the API host in a real browser tab so InfinityFree-style JS cookie
- * checks (aes.js / __test) can complete before extension fetch retries.
+ * Open the API host bridge tab so InfinityFree-style JS cookie checks complete.
  */
 async function warmHost(url) {
-    const base = normalizeApiBase(url).replace(/\/api\/health$/i, '');
-    await ensureHostApiTab(base || url);
+    const base = normalizeApiBase(url).replace(/\/api\/health$/i, '').replace(/\/bridge$/i, '');
+    await ensureHostApiTab(base || url, false);
     return { warmed: true };
 }
 
 /**
- * Run fetch inside the API-host tab (first-party cookies). Extension fetch alone
- * cannot satisfy InfinityFree's browser security check.
+ * Run fetch via window.__GLE_BRIDGE__ inside the /bridge tab (first-party cookies).
  */
 async function hostApiFetch(message) {
     const base = normalizeApiBase(message.base);
@@ -192,23 +231,34 @@ async function hostApiFetch(message) {
         const injection = await chrome.scripting.executeScript({
             target: { tabId },
             world: 'MAIN',
-            func: async (fetchUrl, fetchMethod, fetchHeaders, fetchBody, fetchTimeout) => {
+            func: async (opts) => {
+                const bridge = window.__GLE_BRIDGE__;
+                if (bridge && typeof bridge.fetch === 'function') {
+                    const result = await bridge.fetch(opts);
+                    return {
+                        status: Number(result && result.status || 0),
+                        ok: !!(result && result.ok),
+                        text: String(result && result.text || ''),
+                        error: result && result.error ? String(result.error) : ''
+                    };
+                }
+                // Fallback if old page without bridge object.
                 const controller = new AbortController();
-                const timer = setTimeout(() => controller.abort(), fetchTimeout);
+                const timer = setTimeout(() => controller.abort(), opts.timeout);
                 try {
                     const init = {
-                        method: fetchMethod,
-                        headers: fetchHeaders || {},
+                        method: opts.method,
+                        headers: opts.headers || {},
                         credentials: 'include',
                         cache: 'no-store',
                         signal: controller.signal
                     };
-                    if (fetchBody !== null && fetchMethod !== 'GET' && fetchMethod !== 'HEAD') {
-                        init.body = fetchBody;
+                    if (opts.body !== null && opts.method !== 'GET' && opts.method !== 'HEAD') {
+                        init.body = opts.body;
                     }
-                    const response = await fetch(fetchUrl, init);
+                    const response = await fetch(opts.url, init);
                     const text = await response.text();
-                    return { status: response.status, ok: response.ok, text };
+                    return { status: response.status, ok: response.ok, text, error: '' };
                 } catch (error) {
                     return {
                         status: 0,
@@ -220,33 +270,34 @@ async function hostApiFetch(message) {
                     clearTimeout(timer);
                 }
             },
-            args: [url, method, headers, body, timeout]
+            args: [{ id: 'ext', url, method, headers, body, timeout }]
         });
         return injection && injection[0] ? injection[0].result : null;
     };
 
-    let tabId = await ensureHostApiTab(base);
+    let tabId = await ensureHostApiTab(base, false);
     let result = await runOnce(tabId);
-    if (result && result.error && !result.text) {
-        throw new Error(result.error);
-    }
-    if (result && isSecurityChallengeHtml(result.text)) {
-        await chrome.tabs.update(tabId, { url: base + '/admin/login' });
-        await waitForTab(tabId, 20000);
-        await sleep(1800);
-        try {
-            await waitForTab(tabId, 8000);
-        } catch (error) {
-            // ignore
-        }
-        await sleep(500);
+    const needsRetry = !result
+        || (result.error && !result.text)
+        || isSecurityChallengeHtml(result.text)
+        || result.error === 'host_security_challenge'
+        || result.error === 'host_bridge_not_ready';
+
+    if (needsRetry) {
+        tabId = await ensureHostApiTab(base, true);
         result = await runOnce(tabId);
     }
+
     if (!result) {
-        throw new Error('站点标签页未能执行 API 请求');
+        throw new Error('站点桥接页未能执行 API 请求');
     }
     if (result.error && !result.text) {
-        throw new Error(result.error);
+        throw new Error(result.error === 'host_security_challenge'
+            ? '主机安全校验仍未通过，请稍后重试或换主机'
+            : result.error);
+    }
+    if (isSecurityChallengeHtml(result.text)) {
+        throw new Error('主机开启了浏览器安全校验（InfinityFree），桥接页重试后仍失败');
     }
     return {
         status: Number(result.status || 0),
@@ -373,6 +424,10 @@ function pageUrlCandidates(url) {
         try {
             const parsed = new URL(String(value || '').trim());
             if (!/^https?:$/i.test(parsed.protocol)) return;
+            // Normalize bare domain roots so redirects land consistently.
+            if ((parsed.pathname === '' || parsed.pathname === '/') && !parsed.search && !parsed.hash) {
+                parsed.pathname = '/';
+            }
             const href = parsed.href;
             if (seen.has(href)) return;
             seen.add(href);
@@ -381,23 +436,35 @@ function pageUrlCandidates(url) {
             // skip invalid
         }
     };
-    push(url);
     try {
-        const parsed = new URL(url);
-        const host = parsed.hostname;
+        const parsed = new URL(String(url || '').trim());
+        const host = parsed.hostname.replace(/\.$/, '');
+        const apex = host.startsWith('www.') ? host.slice(4) : host;
         const hosts = host.startsWith('www.')
-            ? [host, host.slice(4)]
-            : [host, 'www.' + host];
-        for (const nextHost of hosts) {
-            for (const protocol of ['https:', 'http:']) {
-                const copy = new URL(parsed.href);
-                copy.protocol = protocol;
-                copy.hostname = nextHost;
-                push(copy.href);
+            ? [host, apex]
+            : ['www.' + host, host];
+        // Prefer HTTPS + www first — many CN B2B sites redirect http→https and reject plain HTTP tabs.
+        const protocols = ['https:', 'http:'];
+        const path = parsed.pathname || '/';
+        const isRoot = path === '/' || path === '';
+        const pathVariants = isRoot
+            ? ['/', '/en/', '/en', '/cn/', '/cn', '/index.html', '/index.htm']
+            : [path, path.endsWith('/') ? path.slice(0, -1) : path + '/'];
+        for (const protocol of protocols) {
+            for (const nextHost of hosts) {
+                for (const nextPath of pathVariants) {
+                    const copy = new URL(parsed.href);
+                    copy.protocol = protocol;
+                    copy.hostname = nextHost;
+                    copy.pathname = nextPath;
+                    push(copy.href);
+                }
             }
         }
+        // Keep the exact original last so callers that pass a deep link still try it.
+        push(url);
     } catch (error) {
-        // keep original only
+        push(url);
     }
     return out;
 }
@@ -608,7 +675,8 @@ async function fetchSerpTab(url, options = {}) {
 
 async function fetchPageTab(url) {
     assertHttpUrl(url);
-    const candidates = pageUrlCandidates(url);
+    // Cap candidates — language-path expansion can grow quickly.
+    const candidates = pageUrlCandidates(url).slice(0, 12);
     let lastError = '无法抓取网页';
 
     for (const candidate of candidates) {
@@ -619,17 +687,25 @@ async function fetchPageTab(url) {
             continue;
         }
         try {
-            const loaded = await waitForTab(tabId, 28000);
+            const loaded = await waitForTab(tabId, 32000);
             if (isChromeErrorTab(loaded)) {
                 lastError = '页面无法打开（网络/证书/DNS 错误）：' + candidate;
                 continue;
             }
-            await sleep(1200);
+            await sleep(1600);
             // Re-check after settle — some navigations land on chrome-error late.
-            const again = await chrome.tabs.get(tabId);
+            let again = await chrome.tabs.get(tabId);
             if (isChromeErrorTab(again)) {
                 lastError = '页面无法打开（网络/证书/DNS 错误）：' + candidate;
                 continue;
+            }
+            // Wait out slow http→https redirects before injecting.
+            if (again.status !== 'complete') {
+                again = await waitForTab(tabId, 12000);
+                if (isChromeErrorTab(again)) {
+                    lastError = '页面无法打开（网络/证书/DNS 错误）：' + candidate;
+                    continue;
+                }
             }
             let injection;
             try {
@@ -640,7 +716,7 @@ async function fetchPageTab(url) {
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 if (/error page|cannot be scripted|Frame with ID/i.test(message)) {
-                    lastError = '标签页处于错误页，无法注入：' + candidate;
+                    lastError = '标签页处于错误页，无法注入：' + (again.url || candidate);
                     continue;
                 }
                 throw error;
@@ -649,7 +725,7 @@ async function fetchPageTab(url) {
             if (result && result.html && String(result.html).trim().length > 200) {
                 return result;
             }
-            lastError = '标签页内容过短或为空：' + candidate;
+            lastError = '标签页内容过短或为空：' + (again.url || candidate);
         } finally {
             await closeTabQuietly(tabId);
         }

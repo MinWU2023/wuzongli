@@ -4,6 +4,8 @@ import {
   hostApiFetch,
   isSecurityChallengeHtml,
   looksLikeJson,
+  setForceHostBridge,
+  shouldForceHostBridge,
   warmHost,
 } from './hostApi';
 
@@ -45,8 +47,9 @@ function buildUrl(base: string, path: string, query?: RequestOptions['query']): 
 function parseApiPayload(text: string, status: number): any {
   if (!text || !looksLikeJson(text)) {
     if (isSecurityChallengeHtml(text)) {
+      setForceHostBridge(true);
       throw new ApiError(
-        '主机开启了浏览器安全校验（常见于 InfinityFree）。请确认 App 已更新，或换可直连的主机。',
+        '主机开启了浏览器安全校验（InfinityFree）。请确认已部署服务端 /bridge，并使用最新 App；若仍失败需换无此校验的主机。',
         'host_security',
         status
       );
@@ -111,19 +114,8 @@ export async function apiRequest<T = unknown>(
 
     let status = 0;
     let text = '';
-    try {
-      const native = await nativeFetch(cleanBase + fullPath, method, headers, bodyStr, timeout);
-      status = native.status;
-      text = native.text;
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new ApiError('请求超时，请检查网络或主机响应。', 'timeout');
-      }
-      text = '';
-      status = 0;
-    }
 
-    if (!looksLikeJson(text) || isSecurityChallengeHtml(text) || status === 0) {
+    if (shouldForceHostBridge()) {
       const bridged = await hostApiFetch({
         base: cleanBase,
         path: fullPath,
@@ -134,6 +126,34 @@ export async function apiRequest<T = unknown>(
       });
       status = bridged.status;
       text = bridged.text;
+    } else {
+      try {
+        const native = await nativeFetch(cleanBase + fullPath, method, headers, bodyStr, timeout);
+        status = native.status;
+        text = native.text;
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          throw new ApiError('请求超时，请检查网络或主机响应。', 'timeout');
+        }
+        text = '';
+        status = 0;
+      }
+
+      if (!looksLikeJson(text) || isSecurityChallengeHtml(text) || status === 0) {
+        if (isSecurityChallengeHtml(text) || status === 0) {
+          setForceHostBridge(true);
+        }
+        const bridged = await hostApiFetch({
+          base: cleanBase,
+          path: fullPath,
+          method,
+          headers,
+          body: bodyStr ?? null,
+          timeout: Math.max(timeout, 35000),
+        });
+        status = bridged.status;
+        text = bridged.text;
+      }
     }
 
     const payload = parseApiPayload(text, status);
@@ -217,16 +237,8 @@ export async function healthCheck(base: string) {
 
     let status = 0;
     let text = '';
-    try {
-      const native = await nativeFetch(cleanBase + path, 'GET', headers, undefined, 15000);
-      status = native.status;
-      text = native.text;
-    } catch {
-      text = '';
-      status = 0;
-    }
 
-    if (!looksLikeJson(text) || isSecurityChallengeHtml(text) || status === 0) {
+    if (shouldForceHostBridge()) {
       const bridged = await hostApiFetch({
         base: cleanBase,
         path,
@@ -237,6 +249,31 @@ export async function healthCheck(base: string) {
       });
       status = bridged.status;
       text = bridged.text;
+    } else {
+      try {
+        const native = await nativeFetch(cleanBase + path, 'GET', headers, undefined, 15000);
+        status = native.status;
+        text = native.text;
+      } catch {
+        text = '';
+        status = 0;
+      }
+
+      if (!looksLikeJson(text) || isSecurityChallengeHtml(text) || status === 0) {
+        if (isSecurityChallengeHtml(text) || status === 0) {
+          setForceHostBridge(true);
+        }
+        const bridged = await hostApiFetch({
+          base: cleanBase,
+          path,
+          method: 'GET',
+          headers,
+          body: null,
+          timeout: 35000,
+        });
+        status = bridged.status;
+        text = bridged.text;
+      }
     }
 
     const payload = parseApiPayload(text, status);

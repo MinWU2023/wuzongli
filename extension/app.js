@@ -68,7 +68,10 @@
     const state = {
         config: { ...DEFAULT_CONFIG },
         tasks: [],
+        /** Task currently shown in the workspace (viewing only). */
         currentId: null,
+        /** Task currently being executed by the auto-run queue (id order). */
+        runnerId: null,
         next: null,
         tab: 'overview',
         domainFilter: 'all',
@@ -89,7 +92,9 @@
         newCategories: [],
         editCategories: [],
         categoryTarget: 'new',
-        categoryDraft: []
+        categoryDraft: [],
+        /** Once InfinityFree aes.js is detected, always route API via /bridge tab. */
+        forceHostBridge: false
     };
 
     class ApiError extends Error {
@@ -142,10 +147,11 @@
     /** InfinityFree / similar free hosts return HTML aes.js instead of the API. */
     function isHostSecurityChallenge(text) {
         if (!text || typeof text !== 'string') return false;
-        const sample = text.slice(0, 3000).toLowerCase();
+        const sample = text.slice(0, 4000).toLowerCase();
         return sample.includes('/aes.js')
             || sample.includes('function tonumber')
             || sample.includes('this site requires javascript')
+            || sample.includes('checking your browser')
             || (sample.includes('__test') && sample.includes('document.cookie'));
     }
 
@@ -237,10 +243,19 @@
         if (state.config.apiKey) headers['X-API-Key'] = state.config.apiKey;
         const body = options.body !== undefined && options.body !== null ? JSON.stringify(options.body) : undefined;
 
+        // Sticky bridge: once InfinityFree challenge is seen, always use /bridge tab.
+        if (state.forceHostBridge) {
+            const viaTab = await requestViaHostTab(path, options);
+            const data = parseApiPayload(viaTab.text, viaTab.status);
+            setConnection('ok', '已连接·桥接');
+            return data;
+        }
+
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeout);
         let response;
         let text = '';
+        let networkFailed = false;
         try {
             response = await fetch(base + path, {
                 method,
@@ -252,22 +267,31 @@
             });
             text = await response.text();
         } catch (error) {
-            setConnection('off', '连接失败');
-            throw new ApiError(error && error.name === 'AbortError' ? '请求超时，请检查服务器响应。' : '无法连接服务器，请检查 API 地址与网络。', 'network_error');
+            networkFailed = true;
+            text = '';
+            if (!(error && error.name === 'AbortError')) {
+                // Fall through to host bridge (common on locked-down free hosts).
+            } else {
+                setConnection('off', '连接失败');
+                throw new ApiError('请求超时，请检查服务器响应。', 'network_error');
+            }
         } finally {
             clearTimeout(timer);
         }
 
-        // InfinityFree: extension fetch often gets aes.js HTML — retry inside a real site tab.
-        if (isHostSecurityChallenge(text)) {
+        // InfinityFree: extension fetch often gets aes.js HTML — use /bridge tab.
+        if (networkFailed || isHostSecurityChallenge(text)) {
+            state.forceHostBridge = true;
             try {
+                await warmApiHost(base);
                 const viaTab = await requestViaHostTab(path, options);
                 const data = parseApiPayload(viaTab.text, viaTab.status);
-                setConnection('ok', '已连接');
+                setConnection('ok', '已连接·桥接');
                 return data;
             } catch (error) {
+                setConnection('off', '连接失败');
                 if (error instanceof ApiError) throw error;
-                throw new ApiError('主机安全校验失败：' + (error.message || '无法打开站点'), 'host_security', response ? response.status : 0);
+                throw new ApiError('主机安全校验失败：' + (error.message || '无法打开站点桥接页'), 'host_security', response ? response.status : 0);
             }
         }
 
@@ -297,14 +321,23 @@
             }
         }
 
-        let health = await fetchText(cleanBase + '/api/health');
-        if (isHostSecurityChallenge(health.text)) {
-            health = await requestViaHostTab('/api/health', { base: cleanBase, apiKey: '', timeout: 20000 });
+        let health;
+        try {
+            health = await fetchText(cleanBase + '/api/health');
+        } catch (error) {
+            health = { status: 0, ok: false, text: '' };
+        }
+        if (!health.text || isHostSecurityChallenge(health.text)) {
+            state.forceHostBridge = true;
+            await warmApiHost(cleanBase);
+            health = await requestViaHostTab('/api/health', { base: cleanBase, apiKey: '', timeout: 25000 });
         }
         if (isHostSecurityChallenge(health.text)) {
-            throw new ApiError('主机开启了浏览器安全校验（InfinityFree aes.js），插件无法稳定调用 API，请换主机。', 'host_security', health.status);
+            throw new ApiError('主机开启了浏览器安全校验（InfinityFree）。已尝试 /bridge 桥接仍失败，请确认已部署最新服务端，或换无此校验的主机。', 'host_security', health.status);
         }
-        if (!health.ok) throw new ApiError('健康检查返回 HTTP ' + health.status + '，请检查伪静态与入口文件。', 'health_failed', health.status);
+        if (!(health.ok || (health.status >= 200 && health.status < 300))) {
+            throw new ApiError('健康检查返回 HTTP ' + health.status + '，请检查伪静态与入口文件。', 'health_failed', health.status);
+        }
         let payload;
         try {
             payload = health.text ? JSON.parse(health.text) : null;
@@ -314,11 +347,19 @@
         if (!payload || payload.ok !== true) throw new ApiError('服务端健康检查未通过。', 'health_failed');
 
         if (apiKey) {
-            let probe = await fetchText(cleanBase + '/api/tasks', {
-                headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' }
-            });
-            if (isHostSecurityChallenge(probe.text)) {
-                probe = await requestViaHostTab('/api/tasks', { base: cleanBase, apiKey, timeout: 20000 });
+            let probe;
+            try {
+                probe = state.forceHostBridge
+                    ? await requestViaHostTab('/api/tasks', { base: cleanBase, apiKey, timeout: 25000 })
+                    : await fetchText(cleanBase + '/api/tasks', {
+                        headers: { 'X-API-Key': apiKey, 'Accept': 'application/json' }
+                    });
+            } catch (error) {
+                probe = { status: 0, ok: false, text: '' };
+            }
+            if (!probe.text || isHostSecurityChallenge(probe.text)) {
+                state.forceHostBridge = true;
+                probe = await requestViaHostTab('/api/tasks', { base: cleanBase, apiKey, timeout: 25000 });
             }
             if (probe.status === 401 || probe.status === 403) {
                 throw new ApiError('API Key 无效或已被轮换，请到后台重新复制。', 'unauthorized', probe.status);
@@ -417,12 +458,41 @@
         }
         if (label) addLocal(label + ' · 切换标签页抓取', 'warn');
         try {
-            const tab = await sendBackground('FETCH_PAGE_TAB', { url }, 70000);
+            const tab = await sendBackground('FETCH_PAGE_TAB', { url }, 90000);
             if (tab && tab.html && tab.html.trim().length > 200) return tab;
         } catch (error) {
             addLocal('标签页抓取失败：' + error.message, 'error');
         }
         return direct;
+    }
+
+    /**
+     * Report a crawl/extract soft-failure so the backend increments attempts
+     * and eventually marks the website as error (stops infinite retry loops).
+     */
+    async function reportWebsiteFail(taskId, websiteId, stage, message) {
+        if (!websiteId) {
+            addLocal(message, 'error');
+            return { skipped: false };
+        }
+        try {
+            const data = await request('/api/tasks/' + taskId + '/websites/' + websiteId + '/fail', {
+                method: 'POST',
+                timeout: 30000,
+                body: { stage: stage === 'extract' ? 'extract' : 'discover', message: String(message || '抓取失败') }
+            });
+            const attempts = Number(data.attempts || 0);
+            const max = Number(data.max_attempts || 3);
+            if (data.skipped) {
+                addLocal((message || '抓取失败') + ' · 已跳过该官网', 'warn');
+            } else {
+                addLocal((message || '抓取失败') + '（第 ' + Math.max(1, attempts) + '/' + max + ' 次，将自动重试）', 'warn');
+            }
+            return data;
+        } catch (error) {
+            addLocal(message + '（上报失败计数失败：' + (error.message || error) + '）', 'error');
+            throw error instanceof ApiError ? error : new ApiError(String(message || '抓取失败'), 'empty_html');
+        }
     }
 
     /* ------------------------------------------------------------------ */
@@ -445,11 +515,15 @@
                 id = taskById(remembered) ? remembered : (state.tasks[0] ? Number(state.tasks[0].id) : null);
             }
             if (id) {
-                await selectTask(id, { kick: options.kick !== false });
+                // Switching / loading tasks is view-only; the queue runner starts separately.
+                await selectTask(id);
             } else {
                 state.currentId = null;
                 state.next = null;
                 showEmptyWorkspace();
+            }
+            if (options.kick !== false) {
+                ensureRunner();
             }
         } catch (error) {
             addLocal('加载任务失败：' + error.message, 'error');
@@ -463,9 +537,13 @@
         try {
             const data = await request('/api/tasks', { timeout: 15000 });
             state.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+            if (state.runnerId && !taskById(state.runnerId)) {
+                state.runnerId = null;
+            }
             renderTaskList();
             if (state.currentId && !taskById(state.currentId)) {
                 state.currentId = null;
+                state.next = null;
                 showEmptyWorkspace();
             }
         } catch (error) {
@@ -473,45 +551,47 @@
         }
     }
 
-    async function selectTask(id, options = {}) {
+    /**
+     * Select a task for viewing only. Never starts or steals the auto-run queue.
+     */
+    async function selectTask(id) {
         const task = taskById(id);
         if (!task) return;
         const changed = Number(state.currentId) !== Number(id);
         state.currentId = Number(id);
         localStorage.setItem(LAST_TASK_KEY, String(state.currentId));
         if (changed) {
-            state.token += 1;
             state.next = null;
             state.data = {};
-            state.forceRun = false;
-            state.pausedByUser = false;
             switchTab('overview', false);
         }
         showTaskWorkspace();
         renderTaskList();
         await loadNext(state.currentId);
-        if (options.kick && state.config.autoRun && taskById(state.currentId)?.status === 'active') {
-            kickLoop();
-        }
     }
 
-    async function loadNext(expectedId = state.currentId) {
-        if (!expectedId) return null;
+    /**
+     * Fetch /next for a task. UI workspace updates only when that task is the one being viewed.
+     */
+    async function loadNext(taskId) {
+        if (!taskId) return null;
+        const expectedId = Number(taskId);
         const data = await request('/api/tasks/' + expectedId + '/next', { timeout: 30000 });
-        if (Number(state.currentId) !== Number(expectedId)) return null;
-        state.next = data;
         const task = data.task || {};
         const counts = data.counts || {};
         mergeTask(task, counts);
-        renderWorkspace(task, counts);
-        renderNext(data);
-        renderTaskList();
-        if (state.tab !== 'overview') {
-            const cache = state.data[state.tab];
-            if (!cache || Date.now() - cache.at > 7000) {
-                loadTabData(state.tab, true);
+        if (Number(state.currentId) === expectedId) {
+            state.next = data;
+            renderWorkspace(task, counts);
+            renderNext(data);
+            if (state.tab !== 'overview') {
+                const cache = state.data[state.tab];
+                if (!cache || Date.now() - cache.at > 7000) {
+                    loadTabData(state.tab, true);
+                }
             }
         }
+        renderTaskList();
         return data;
     }
 
@@ -556,23 +636,48 @@
             .sort((a, b) => Number(a.id) - Number(b.id));
     }
 
+    /** Always pick the lowest-id active task for the auto-run queue. */
+    function pickRunnerTaskId() {
+        const active = queuedActiveTasks();
+        if (!active.length) return null;
+        return Number(active[0].id);
+    }
+
+    function ensureRunner() {
+        if (state.busy || document.hidden) return;
+        if (!state.config.autoRun && !state.forceRun) return;
+        if (state.pausedByUser || !state.serverRunnerEnabled) return;
+        if (Date.now() < state.cooldownUntil) return;
+        const taskId = pickRunnerTaskId();
+        if (!taskId) {
+            state.runnerId = null;
+            renderTaskList();
+            return;
+        }
+        kickLoop();
+    }
+
     async function advanceToNextQueuedTask(fromTaskId) {
         await loadTasksSilent();
         const active = queuedActiveTasks();
         if (!active.length) {
+            state.runnerId = null;
+            renderTaskList();
             addLocal('没有更多可执行任务，队列空闲。', 'info');
             return false;
         }
-        const current = Number(fromTaskId || state.currentId || 0);
+        const current = Number(fromTaskId || state.runnerId || 0);
+        // Strict id order: next higher id, otherwise the lowest remaining active task.
         const next = active.find((task) => Number(task.id) > current) || active[0];
         if (!next) return false;
         if (Number(next.id) === current) {
-            const stillActionable = actionable(state.next) && state.next?.task?.status === 'active';
-            return stillActionable;
+            const probe = await loadNext(current);
+            return actionable(probe) && probe?.task?.status === 'active';
         }
-        addLocal('任务完成，切换到下一任务：' + (next.city || ('#' + next.id)), 'success');
-        toast('开始下一任务：' + (next.city || ('#' + next.id)), 'success');
-        await selectTask(Number(next.id), { kick: true });
+        state.runnerId = Number(next.id);
+        renderTaskList();
+        addLocal('按顺序开始下一任务 #' + next.id + ' ' + (next.city || ''), 'success');
+        toast('队列执行：#' + next.id + ' ' + (next.city || ''), 'success');
         return true;
     }
 
@@ -581,65 +686,71 @@
         if (state.busy || Date.now() < state.cooldownUntil) return;
         if (!state.config.apiBase || !state.config.apiKey) return;
         const runnerOn = await syncRunnerFlag();
-        if (!runnerOn) {
-            await loadTasksSilent();
-            return;
-        }
-        if (!state.currentId) {
-            await loadTasksSilent();
-            const first = queuedActiveTasks()[0];
-            if (first && state.config.autoRun && !state.pausedByUser) {
-                await selectTask(Number(first.id), { kick: true });
-            }
-            return;
-        }
-        try {
-            await loadNext();
-            const task = taskById(state.currentId);
-            if (task && task.status !== 'active') {
-                if (state.config.autoRun && !state.pausedByUser) {
-                    await advanceToNextQueuedTask(state.currentId);
+        await loadTasksSilent();
+        if (!runnerOn) return;
+
+        // Keep the viewed task's workspace fresh without touching the runner.
+        if (state.currentId) {
+            try {
+                await loadNext(state.currentId);
+            } catch (error) {
+                if (error instanceof ApiError && error.status === 404) {
+                    state.currentId = null;
+                    state.next = null;
+                    showEmptyWorkspace();
+                } else {
+                    setConnection('off', '连接异常');
+                    return;
                 }
-                return;
             }
-            if (state.config.autoRun && !state.pausedByUser && actionable(state.next)) {
-                kickLoop();
-            } else if (state.config.autoRun && !state.pausedByUser && !actionable(state.next)) {
-                await advanceToNextQueuedTask(state.currentId);
-            }
-        } catch (error) {
-            if (error instanceof ApiError && error.status === 404) {
-                await loadTasks();
-            } else {
-                setConnection('off', '连接异常');
-            }
+        } else {
+            const fallback = state.tasks[0];
+            if (fallback) await selectTask(Number(fallback.id));
         }
+
+        ensureRunner();
     }
 
     async function kickLoop() {
         if (state.busy) return;
         const token = state.token;
-        const taskId = state.currentId;
-        if (!taskId) return;
+        const taskId = pickRunnerTaskId();
+        if (!taskId) {
+            state.runnerId = null;
+            renderTaskList();
+            return;
+        }
+        state.runnerId = taskId;
         state.busy = true;
         updateBusyUI();
+        renderTaskList();
+        let lastNext = null;
         try {
             for (let guard = 0; guard < 500; guard += 1) {
-                if (state.token !== token || Number(state.currentId) !== Number(taskId)) break;
+                if (state.token !== token) break;
+                // Always stay on the lowest-id active task; never follow UI selection.
+                const preferred = pickRunnerTaskId();
+                if (!preferred) break;
+                if (Number(preferred) !== Number(taskId)) {
+                    // A lower-id task became active — finish this loop and let ensureRunner pick it up.
+                    break;
+                }
+                if (Number(state.runnerId) !== Number(taskId)) break;
                 if (!(await syncRunnerFlag())) {
                     addLocal('检测到 App 关闭自动执行，已停止。', 'warn');
                     break;
                 }
-                if (!state.next) await loadNext(taskId);
-                const next = state.next;
-                if (!actionable(next)) break;
-                if (next.task.status !== 'active') break;
+                lastNext = await loadNext(taskId);
+                if (!actionable(lastNext)) break;
+                if (lastNext.task.status !== 'active') break;
                 if (!state.config.autoRun && !state.forceRun) break;
-                await executeAction(next);
+                await executeAction(lastNext);
                 if (state.token !== token) break;
-                invalidateData();
-                await loadNext(taskId);
-                if (state.tab !== 'overview') await loadTabData(state.tab, true);
+                if (Number(state.currentId) === Number(taskId)) {
+                    invalidateData();
+                    if (state.tab !== 'overview') await loadTabData(state.tab, true);
+                }
+                lastNext = await loadNext(taskId);
                 if (!state.config.autoRun && !state.forceRun) break;
                 await sleep(280);
             }
@@ -655,41 +766,48 @@
         } finally {
             state.busy = false;
             updateBusyUI();
+            renderTaskList();
             if (state.config.autoRun && !state.pausedByUser && state.serverRunnerEnabled && !document.hidden) {
                 const task = taskById(taskId);
-                const finished = !task || task.status === 'completed' || task.stage === 'done' || !actionable(state.next);
+                const finished = !task || task.status === 'completed' || task.stage === 'done' || !actionable(lastNext);
                 if (finished) {
                     setTimeout(async () => {
                         if (state.busy) return;
                         const moved = await advanceToNextQueuedTask(taskId);
-                        if (!moved && !state.busy) poll();
+                        if (moved) ensureRunner();
+                        else if (!state.busy) poll();
                     }, 500);
-                } else if (Number(state.currentId) === Number(taskId)) {
-                    setTimeout(() => { if (!state.busy) poll(); }, 700);
+                } else {
+                    setTimeout(() => { if (!state.busy) ensureRunner(); }, 700);
                 }
             }
         }
     }
 
     async function runOneStep() {
-        if (state.busy) return;
+        if (state.busy) {
+            toast('队列正在执行任务 #' + (state.runnerId || '—') + '，请稍候或关闭自动执行后再单步。', 'warn');
+            return;
+        }
         const taskId = state.currentId;
         if (!taskId) return;
         state.busy = true;
+        state.forceRun = true;
         updateBusyUI();
         try {
-            if (!state.next) await loadNext(taskId);
-            if (!actionable(state.next)) {
+            const next = await loadNext(taskId);
+            if (!actionable(next)) {
                 toast('当前没有可执行的动作。', 'info');
                 return;
             }
-            await executeAction(state.next);
+            await executeAction(next);
             invalidateData();
             await loadNext(taskId);
         } catch (error) {
             addLocal(error.message, 'error');
             toast(error.message, 'error', 5000);
         } finally {
+            state.forceRun = false;
             state.busy = false;
             updateBusyUI();
         }
@@ -699,16 +817,21 @@
         const startBtn = $('#startBtn');
         const startLabel = $('#startBtnLabel');
         const runOne = $('#runOneBtn');
-        if (startBtn) startBtn.disabled = state.busy;
+        const viewingRunner = state.busy && Number(state.currentId) === Number(state.runnerId);
+        if (startBtn) startBtn.disabled = false;
         if (runOne) runOne.disabled = state.busy;
-        if (startLabel && state.busy) startLabel.textContent = '运行中…';
-        else if (startLabel) {
-            const task = taskById(state.currentId);
-            const current = task ? task.status : '';
-            startLabel.textContent = current === 'paused' ? '继续任务' : (current === 'failed' ? '重新开始' : '开始采集');
+        if (startLabel) {
+            if (viewingRunner) {
+                startLabel.textContent = '运行中…';
+            } else {
+                const task = taskById(state.currentId);
+                const current = task ? task.status : '';
+                startLabel.textContent = current === 'paused' ? '继续任务' : (current === 'failed' ? '重新开始' : '开始采集');
+            }
         }
         const banner = $('#actionBanner');
-        if (banner) banner.classList.toggle('is-running', state.busy);
+        if (banner) banner.classList.toggle('is-running', viewingRunner);
+        renderTaskList();
     }
 
     /* ------------------------------------------------------------------ */
@@ -747,7 +870,10 @@
             addLocal('抓取官网：' + (job.domain || job.url), 'info');
             const page = await fetchPageWithFallback(job.url, job.domain || '');
             if (!page || !page.html) {
-                throw new ApiError('网页抓取失败，未能取得 HTML：' + (job.domain || job.url), 'empty_html');
+                const message = '网页抓取失败，未能取得 HTML：' + (job.domain || job.url);
+                const fail = await reportWebsiteFail(taskId, Number(job.website_id), 'discover', message);
+                await sleep(fail && fail.skipped ? 400 : 1800);
+                return fail || { skipped: false, reason: 'empty_html' };
             }
             const data = await request('/api/tasks/' + taskId + '/websites/' + Number(job.website_id) + '/pages', {
                 method: 'POST',
@@ -773,7 +899,10 @@
                 await sleep(280);
             }
             if (!collected.length) {
-                throw new ApiError('关键页面均无法抓取，稍后将自动重试：' + (job.domain || ''), 'empty_pages');
+                const message = '关键页面均无法抓取：' + (job.domain || '');
+                const fail = await reportWebsiteFail(taskId, Number(job.website_id), 'extract', message);
+                await sleep(fail && fail.skipped ? 400 : 1800);
+                return fail || { skipped: false, reason: 'empty_pages' };
             }
             const data = await request('/api/tasks/' + taskId + '/websites/' + Number(job.website_id) + '/extract', {
                 method: 'POST',
@@ -998,13 +1127,19 @@
             return;
         }
         list.innerHTML = filtered.map((task) => {
-            const active = Number(task.id) === Number(state.currentId);
+            const viewing = Number(task.id) === Number(state.currentId);
+            const running = Number(task.id) === Number(state.runnerId) && state.busy;
             const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
-            return '<button class="task-item ' + (active ? 'active' : '') + '" data-task-id="' + Number(task.id) + '" type="button">' +
+            const stageText = running
+                ? '队列执行中 · ' + progress + '%'
+                : escapeHtml(STAGE_LABEL[task.stage] || task.stage || '等待启动') + ' · ' + progress + '%';
+            return '<button class="task-item ' + (viewing ? 'active' : '') + (running ? ' is-running' : '') + '" data-task-id="' + Number(task.id) + '" type="button">' +
                 '<span class="task-avatar">' + escapeHtml(String(task.city || '?').slice(0, 1)) + '</span>' +
                 '<span class="task-item-body">' +
-                    '<span class="task-item-top"><b>' + escapeHtml(task.city) + '</b><i class="status-dot ' + escapeHtml(task.status) + '"></i></span>' +
-                    '<small>' + escapeHtml(STAGE_LABEL[task.stage] || task.stage || '等待启动') + ' · ' + progress + '%</small>' +
+                    '<span class="task-item-top"><b>' + escapeHtml(task.city) + '</b>' +
+                        (running ? '<em class="task-running-tag">执行中</em>' : '') +
+                        '<i class="status-dot ' + escapeHtml(task.status) + '"></i></span>' +
+                    '<small>' + stageText + '</small>' +
                     '<span class="task-mini-track"><i style="width:' + progress + '%"></i></span>' +
                 '</span>' +
                 '<span class="task-chevron">›</span>' +
@@ -1056,10 +1191,12 @@
         const retryBtn = $('#retryBtn');
         if (startBtn) {
             startBtn.hidden = status === 'completed';
-            startBtn.disabled = state.busy;
+            startBtn.disabled = false;
         }
-        if (startLabel && !state.busy) {
-            startLabel.textContent = status === 'paused' ? '继续任务' : (status === 'failed' ? '重新开始' : '开始采集');
+        if (startLabel) {
+            const viewingRunner = state.busy && Number(state.currentId) === Number(state.runnerId);
+            if (viewingRunner) startLabel.textContent = '运行中…';
+            else startLabel.textContent = status === 'paused' ? '继续任务' : (status === 'failed' ? '重新开始' : '开始采集');
         }
         if (pauseBtn) pauseBtn.hidden = status !== 'active';
         if (retryBtn) retryBtn.hidden = status === 'completed';
@@ -1094,18 +1231,25 @@
         const label = ACTION_LABEL[action] || next.message || '等待下一步';
         const icon = ICONS[action] || ICONS.default;
 
+        const viewingRunner = state.busy && Number(state.currentId) === Number(state.runnerId);
         const banner = $('#actionBanner');
         if (banner) {
-            banner.className = 'action-banner' + (state.busy ? ' is-running' : '') +
+            banner.className = 'action-banner' + (viewingRunner ? ' is-running' : '') +
                 (action === 'done' || task.status === 'completed' ? ' is-done' : '') +
                 (task.status === 'paused' || action === 'paused' ? ' is-paused' : '');
         }
         setText('#actionTitle', label);
-        setText('#actionMessage', next.message || '等待服务器下发下一步动作。');
+        let message = next.message || '等待服务器下发下一步动作。';
+        if (state.busy && state.runnerId && Number(state.currentId) !== Number(state.runnerId)) {
+            const runner = taskById(state.runnerId);
+            message = '当前为查看模式。队列正在执行 #' + state.runnerId +
+                (runner && runner.city ? ' ' + runner.city : '') + '（按任务 ID 顺序）。';
+        }
+        setText('#actionMessage', message);
         const actionIcon = $('#currentActionIcon');
         if (actionIcon) actionIcon.innerHTML = icon;
         setText('#currentActionTitle', label);
-        setText('#currentActionText', next.message || '等待服务器下发下一步动作。');
+        setText('#currentActionText', message);
 
         const meta = $('#actionMeta');
         if (meta) meta.innerHTML = buildActionMeta(action, job, counts);
@@ -1916,19 +2060,17 @@
                 }
             });
             closeModal('#newTaskModal');
-            toast('任务已创建，开始自动采集。', 'success');
+            toast('任务已创建，将按 ID 顺序加入队列。', 'success');
             const task = data.task;
-            state.forceRun = true;
             state.pausedByUser = false;
             if (task) {
                 mergeTask(task, data.counts || {});
-                state.currentId = Number(task.id);
-                localStorage.setItem(LAST_TASK_KEY, String(task.id));
             }
             renderTaskList();
             await loadTasks({ kick: false });
-            await selectTask(Number(task.id), { kick: false });
-            kickLoop();
+            if (task) await selectTask(Number(task.id));
+            // Do not jump the runner to the new task — keep ascending id order.
+            ensureRunner();
         } catch (error) {
             toast(error.message, 'error', 5000);
         } finally {
@@ -1950,16 +2092,17 @@
         try {
             if (task.status === 'paused') {
                 await request('/api/tasks/' + task.id + '/resume', { method: 'POST' });
-                addLocal('任务已恢复。', 'success');
+                addLocal('任务 #' + task.id + ' 已恢复，将按 ID 顺序排队执行。', 'success');
             } else if (task.status === 'failed') {
                 await request('/api/tasks/' + task.id + '/retry', { method: 'POST' });
-                addLocal('已重置异常并重新启动。', 'success');
+                addLocal('任务 #' + task.id + ' 已重置异常并重新排队。', 'success');
             }
-            state.forceRun = true;
             state.pausedByUser = false;
-            state.token += 1;
+            await loadTasksSilent();
             await loadNext(task.id);
-            kickLoop();
+            // Resume only puts it back in the id-ordered queue; do not steal the runner.
+            ensureRunner();
+            toast('已加入队列（按任务 ID 顺序执行）', 'success');
         } catch (error) {
             toast(error.message, 'error');
         }
@@ -1970,12 +2113,20 @@
         if (!task) return;
         try {
             await request('/api/tasks/' + task.id + '/pause', { method: 'POST' });
-            state.forceRun = false;
-            state.pausedByUser = true;
-            state.token += 1;
-            addLocal('任务已暂停。', 'warn');
+            const wasRunning = Number(task.id) === Number(state.runnerId);
+            if (wasRunning) {
+                state.token += 1;
+                state.forceRun = false;
+                state.runnerId = null;
+            }
+            addLocal('任务 #' + task.id + ' 已暂停。', 'warn');
             toast('任务已暂停，关闭窗口不会丢失进度。', 'warn');
+            await loadTasksSilent();
             await loadNext(task.id);
+            if (wasRunning) {
+                // Continue the remaining queue by id; pausing one task must not stop others.
+                setTimeout(() => ensureRunner(), 400);
+            }
         } catch (error) {
             toast(error.message, 'error');
         }
@@ -1986,12 +2137,12 @@
         if (!task) return;
         try {
             await request('/api/tasks/' + task.id + '/retry', { method: 'POST' });
-            state.forceRun = true;
             state.pausedByUser = false;
-            addLocal('异常项已重置，继续处理。', 'success');
+            addLocal('任务 #' + task.id + ' 异常项已重置，按队列顺序继续。', 'success');
             toast('已重置异常项。', 'success');
+            await loadTasksSilent();
             await loadNext(task.id);
-            kickLoop();
+            ensureRunner();
         } catch (error) {
             toast(error.message, 'error');
         }
@@ -2085,13 +2236,17 @@
             // Clear cached tab datasets so UI reloads fresh rows
             state.data[task.id] = { keywords: null, domains: null, companies: null, logs: null };
             const stageName = STAGE_LABEL[stage] || stage;
-            addLocal('已将任务回退到「' + stageName + '」阶段并重新启动。', 'success');
-            toast('任务已回退至「' + stageName + '」并重新开始', 'success');
-            state.forceRun = true;
+            addLocal('已将任务 #' + task.id + ' 回退到「' + stageName + '」，按队列顺序继续。', 'success');
+            toast('任务已回退至「' + stageName + '」', 'success');
             state.pausedByUser = false;
+            if (Number(task.id) === Number(state.runnerId)) {
+                state.token += 1;
+                state.runnerId = null;
+            }
+            await loadTasksSilent();
             await loadNext(task.id);
             await refreshCurrentTab();
-            kickLoop();
+            ensureRunner();
         } catch (error) {
             toast(error.message, 'error', 5000);
         } finally {

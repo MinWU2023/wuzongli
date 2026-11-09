@@ -5,6 +5,7 @@ namespace App\Services;
 
 use App\Core\Db;
 use App\Core\HttpException;
+use App\Core\Logger;
 use App\Core\Str;
 use App\Core\Url;
 use DOMDocument;
@@ -34,7 +35,20 @@ final class WebsiteService
         if ($links === []) {
             $links = [['url' => $root, 'text' => 'Home']];
         }
-        $picked = $this->ai->discoverPages($task, $website, $links);
+        // Cap payload so page discovery stays fast even on link-heavy B2B sites.
+        $aiLinks = array_slice($links, 0, 80);
+        $picked = ['home' => null, 'about' => null, 'contact' => null];
+        $aiFallback = false;
+        try {
+            $picked = $this->ai->discoverPages($task, $website, $aiLinks);
+        } catch (\Throwable $e) {
+            // AI relay timeouts must not block the crawl queue — heuristics are enough for About/Contact.
+            $aiFallback = true;
+            Logger::warning('page discovery AI failed, using heuristics', [
+                'domain' => $domain,
+                'error' => $e->getMessage(),
+            ]);
+        }
         $allowed = [];
         foreach ($links as $link) {
             $allowed[$link['url']] = true;
@@ -58,10 +72,10 @@ final class WebsiteService
         $contact = $sanitize($picked['contact'] ?? null);
 
         if ($about === null) {
-            $about = $this->heuristicLink($links, ['about', 'about-us', 'company', 'our-company', 'our-story', 'who-we-are', 'profile']);
+            $about = $this->heuristicLink($links, ['about', 'about-us', 'company', 'our-company', 'our-story', 'who-we-are', 'profile', 'aboutus']);
         }
         if ($contact === null) {
-            $contact = $this->heuristicLink($links, ['contact', 'contact-us', 'get-in-touch', 'inquiry', 'enquiry', 'reach-us']);
+            $contact = $this->heuristicLink($links, ['contact', 'contact-us', 'get-in-touch', 'inquiry', 'enquiry', 'reach-us', 'contactus', 'contacts']);
         }
         if ($home === $about) {
             $about = null;
@@ -93,7 +107,7 @@ final class WebsiteService
             'last_error' => null,
         ], ['id' => (int) $website['id'], 'task_id' => (int) $task['id']]);
 
-        return ['pages' => $pages, 'about' => $about, 'contact' => $contact];
+        return ['pages' => $pages, 'about' => $about, 'contact' => $contact, 'ai_fallback' => $aiFallback];
     }
 
     /**
@@ -130,8 +144,33 @@ final class WebsiteService
         }
         $pagesText = Str::limit($pagesText, 20000, '');
 
-        $ai = $this->ai->extractContacts($task, $website, $pagesText);
         $regex = $this->regexContacts($allHtml, $pagesText);
+        $ai = [];
+        $aiFallback = false;
+        try {
+            $ai = $this->ai->extractContacts($task, $website, $pagesText);
+        } catch (\Throwable $e) {
+            // Keep the pipeline moving when the AI relay is unreachable; regex still finds phones/emails.
+            $aiFallback = true;
+            Logger::warning('contact extraction AI failed, using regex fallback', [
+                'domain' => $domain,
+                'error' => $e->getMessage(),
+            ]);
+            $ai = [
+                'company_name' => '',
+                'phones' => [],
+                'emails' => [],
+                'address' => '',
+                'whatsapp' => '',
+                'linkedin' => '',
+                'tiktok' => '',
+                'youtube' => '',
+                'facebook' => '',
+                'instagram' => '',
+                '_fallback' => 'regex',
+                '_error' => Str::limit($e->getMessage(), 300, ''),
+            ];
+        }
 
         $companyName = trim((string) ($ai['company_name'] ?? ''));
         if ($companyName === '') {
@@ -224,6 +263,7 @@ final class WebsiteService
             'last_error' => null,
         ], ['id' => (int) $website['id'], 'task_id' => (int) $task['id']]);
 
+        $row['ai_fallback'] = $aiFallback;
         return $row;
     }
 
