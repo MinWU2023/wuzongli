@@ -6,7 +6,11 @@
 /** @var array<int, array<string, mixed>> $websites */
 /** @var array<int, array<string, mixed>> $companies */
 /** @var array<int, array<string, mixed>> $logs */
+/** @var array{companies:int,websites:int,total:int} $crawlCache */
+/** @var bool $canClearCrawlCache */
 $stages = stage_meta();
+$crawlCache = $crawlCache ?? ['companies' => 0, 'websites' => 0, 'total' => 0];
+$canClearCrawlCache = !empty($canClearCrawlCache);
 $currentIndex = $stages[$task['stage']]['index'] ?? 0;
 $isDone = $task['stage'] === 'done';
 $countCards = [
@@ -56,6 +60,15 @@ $countCards = [
                 <input type="hidden" name="action" value="retry">
                 <button class="btn ghost" type="submit">重试异常</button>
             </form>
+            <?php if (!empty($canClearCrawlCache)): ?>
+                <form method="post" action="<?= e(url('/admin/tasks/' . (int) $task['id'] . '/action')) ?>" onsubmit="return confirm('将清除本任务抓取缓存（提取中间结果 / 页面列表），企业线索保留。确定吗？');">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="action" value="clear_crawl_cache">
+                    <button class="btn danger-ghost" type="submit" <?= ((int) ($crawlCache['total'] ?? 0) === 0) ? 'disabled title="已无缓存可清理"' : '' ?>>
+                        清理抓取缓存<?= ((int) ($crawlCache['total'] ?? 0) > 0) ? ' (' . (int) $crawlCache['total'] . ')' : '' ?>
+                    </button>
+                </form>
+            <?php endif; ?>
             <a class="btn dark" href="<?= e(url('/admin/tasks/' . (int) $task['id'] . '/export.csv')) ?>">导出 CSV</a>
         </div>
     </div>

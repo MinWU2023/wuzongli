@@ -137,11 +137,16 @@ final class TaskController extends ApiController
         if ($keywordId <= 0) {
             throw HttpException::validation('缺少 keyword_id');
         }
+        // Prefer the server account pool. Only use a plugin-supplied key when the
+        // pool has no ready account — otherwise a dead extension default key would
+        // mask newly added admin accounts and keep returning "Not enough credits".
         $overrideKey = trim($this->request->string('serper_api_key'));
-        if ($overrideKey !== '') {
-            \App\Services\Settings::set('serper_api_key', \App\Core\Crypto::encrypt($overrideKey));
+        $accounts = new \App\Services\SerperAccountService();
+        $useOverride = null;
+        if ($accounts->current() === null && $overrideKey !== '') {
+            $useOverride = $overrideKey;
         }
-        $this->ok($this->pipeline->searchSerper($taskId, $keywordId, $page, $overrideKey !== '' ? $overrideKey : null));
+        $this->ok($this->pipeline->searchSerper($taskId, $keywordId, $page, $useOverride));
     }
 
     /** 出海外贸产品分类库（大类 → 细分类，中英文）。 */

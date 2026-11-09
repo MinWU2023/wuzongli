@@ -92,7 +92,18 @@ $queryBase = array_filter(['status' => $status, 'q' => $search], static fn ($val
                         </td>
                         <td><b class="table-number accent"><?= format_number($task['companies_count']) ?></b></td>
                         <td><span class="table-date"><?= e(format_dt((string) $task['created_at'], 'm-d H:i')) ?></span></td>
-                        <td class="table-actions"><a class="row-action" href="<?= e(url('/admin/tasks/' . (int) $task['id'])) ?>">详情 →</a></td>
+                        <td class="table-actions">
+                            <?php if (!empty($task['can_clear_crawl_cache'])): ?>
+                                <form class="inline-form" method="post" action="<?= e(url('/admin/tasks/' . (int) $task['id'] . '/action')) ?>" onsubmit="return confirm('将清除本任务抓取缓存（提取中间结果 / 页面列表），企业线索保留。确定吗？');">
+                                    <?= csrf_field() ?>
+                                    <input type="hidden" name="action" value="clear_crawl_cache">
+                                    <button class="row-action danger" type="submit" <?= ((int) ($task['crawl_cache_count'] ?? 0) === 0) ? 'disabled title="已无缓存可清理"' : '' ?>>
+                                        清理缓存<?= ((int) ($task['crawl_cache_count'] ?? 0) > 0) ? ' (' . (int) $task['crawl_cache_count'] . ')' : '' ?>
+                                    </button>
+                                </form>
+                            <?php endif; ?>
+                            <a class="row-action" href="<?= e(url('/admin/tasks/' . (int) $task['id'])) ?>">详情 →</a>
+                        </td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>

@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { registerHostBridge, resolveHostResult } from '../hostApi';
 
 type Props = {
   enabled?: boolean;
+  /** Optional default API base to pre-warm as soon as WebView mounts. */
+  apiBase?: string;
 };
 
 type WarmWaiter = {
@@ -13,17 +15,21 @@ type WarmWaiter = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+const CHROME_MOBILE_UA =
+  'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+
 /**
- * Hidden WebView loads /bridge, passes InfinityFree aes.js, then proxies API
+ * Off-screen WebView loads /bridge, passes InfinityFree aes.js, then proxies API
  * calls with first-party cookies via window.__GLE_BRIDGE__.
  */
-export function HostApiWebView({ enabled = true }: Props) {
+export function HostApiWebView({ enabled = true, apiBase = '' }: Props) {
   const ref = useRef<WebView>(null);
   const [uri, setUri] = useState('about:blank');
   const readyRef = useRef(false);
   const currentBase = useRef('');
   const warmWaiters = useRef<WarmWaiter[]>([]);
-  const loadGeneration = useRef(0);
+  const challengeHits = useRef(0);
+  const lastChallengeAt = useRef(0);
 
   const clearWarmWaiters = (error?: Error) => {
     const list = warmWaiters.current.splice(0);
@@ -40,13 +46,14 @@ export function HostApiWebView({ enabled = true }: Props) {
 
   const markReady = () => {
     readyRef.current = true;
+    challengeHits.current = 0;
     clearWarmWaiters();
   };
 
   const reloadBridge = (base: string) => {
     readyRef.current = false;
     currentBase.current = base;
-    loadGeneration.current += 1;
+    challengeHits.current = 0;
     setUri(base.replace(/\/+$/, '') + '/bridge?_=' + Date.now());
   };
 
@@ -64,8 +71,13 @@ export function HostApiWebView({ enabled = true }: Props) {
             const idx = warmWaiters.current.findIndex((w) => w.resolve === resolve);
             if (idx >= 0) warmWaiters.current.splice(idx, 1);
             if (readyRef.current && currentBase.current === base) resolve();
-            else reject(new Error('主机桥接预热超时，请确认已部署 /bridge 页面'));
-          }, 28000);
+            else
+              reject(
+                new Error(
+                  '主机开启了浏览器安全校验(常见于InfinityFree)。请确认App已更新，或换可直连的主机。'
+                )
+              );
+          }, 45000);
 
           warmWaiters.current.push({ resolve, reject, timer });
 
@@ -132,11 +144,15 @@ export function HostApiWebView({ enabled = true }: Props) {
             }
           };
 
-          if (readyRef.current) {
-            setTimeout(kick, 40);
-          } else {
-            setTimeout(kick, 1200);
-          }
+          const deadline = Date.now() + 22000;
+          const waitReady = () => {
+            if (readyRef.current || Date.now() >= deadline) {
+              setTimeout(kick, readyRef.current ? 40 : 200);
+              return;
+            }
+            setTimeout(waitReady, 250);
+          };
+          waitReady();
         }),
 
       reload: (baseUrl: string) => {
@@ -144,11 +160,63 @@ export function HostApiWebView({ enabled = true }: Props) {
       },
     });
 
+    const base = String(apiBase || '')
+      .trim()
+      .replace(/\/+$/, '');
+    if (base) {
+      // Auto pre-warm after handlers are registered (avoids App effect race).
+      setTimeout(() => {
+        try {
+          if (!readyRef.current || currentBase.current !== base) {
+            reloadBridge(base);
+          }
+        } catch {
+          // ignore
+        }
+      }, 80);
+    }
+
     return () => {
       clearWarmWaiters(new Error('主机桥接已卸载'));
       registerHostBridge(null);
     };
-  }, [enabled]);
+  }, [enabled, apiBase]);
+
+  const pokeBridge = () => {
+    try {
+      ref.current?.injectJavaScript(`
+        (function(){
+          try {
+            var html = document.documentElement ? document.documentElement.innerHTML.slice(0, 4000) : '';
+            var challenge = html.indexOf('/aes.js') !== -1
+              || html.indexOf('function toNumbers') !== -1
+              || (html.indexOf('__test') !== -1 && html.indexOf('document.cookie') !== -1);
+            var hasBridge = !!(window.__GLE_BRIDGE__);
+            if (challenge && !hasBridge) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'BRIDGE_CHALLENGE',
+                at: Date.now(),
+                href: String(location.href || '')
+              }));
+              return true;
+            }
+            if (hasBridge && window.__GLE_BRIDGE__.prove) {
+              window.__GLE_BRIDGE__.prove();
+            } else if (!hasBridge) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'BRIDGE_NO_SCRIPT',
+                at: Date.now(),
+                href: String(location.href || '')
+              }));
+            }
+          } catch (e) {}
+          true;
+        })();
+      `);
+    } catch {
+      // ignore
+    }
+  };
 
   const onMessage = (event: WebViewMessageEvent) => {
     try {
@@ -163,6 +231,19 @@ export function HostApiWebView({ enabled = true }: Props) {
         readyRef.current = false;
         return;
       }
+      if (data.type === 'BRIDGE_CHALLENGE' || data.type === 'BRIDGE_NO_SCRIPT') {
+        const now = Date.now();
+        if (now - lastChallengeAt.current > 2500) {
+          challengeHits.current += 1;
+          lastChallengeAt.current = now;
+        }
+        // aes.js should redirect itself; if stuck, force a fresh /bridge load.
+        if (challengeHits.current >= 4 && currentBase.current) {
+          challengeHits.current = 0;
+          reloadBridge(currentBase.current);
+        }
+        return;
+      }
       if (data.type === 'BRIDGE_RESULT' || data.id) {
         resolveHostResult(data);
       }
@@ -174,32 +255,31 @@ export function HostApiWebView({ enabled = true }: Props) {
   if (!enabled) return null;
 
   return (
-    <View style={styles.hidden} pointerEvents="none">
+    <View style={styles.offscreen} pointerEvents="none" collapsable={false}>
       <WebView
         ref={ref}
         source={{ uri }}
+        userAgent={CHROME_MOBILE_UA}
+        applicationNameForUserAgent="Chrome/120.0.0.0"
         onLoadEnd={() => {
-          // Bridge script posts BRIDGE_READY after /api/health proves JSON.
-          // Fallback: if page loaded but message missed, poke prove().
-          setTimeout(() => {
-            if (readyRef.current) return;
-            try {
-              ref.current?.injectJavaScript(`
-                (function(){
-                  try {
-                    if (window.__GLE_BRIDGE__ && window.__GLE_BRIDGE__.prove) {
-                      window.__GLE_BRIDGE__.prove();
-                    }
-                  } catch (e) {}
-                  true;
-                })();
-              `);
-            } catch {
-              // ignore
-            }
-          }, 1600);
+          // First paint is often InfinityFree aes.js; give it time to set __test + redirect.
+          setTimeout(pokeBridge, 900);
+          setTimeout(pokeBridge, 2200);
+          setTimeout(pokeBridge, 4500);
+        }}
+        onNavigationStateChange={() => {
+          // After aes.js location.href, re-check for bridge script.
+          setTimeout(pokeBridge, 600);
         }}
         onMessage={onMessage}
+        onContentProcessDidTerminate={() => {
+          readyRef.current = false;
+          if (currentBase.current) reloadBridge(currentBase.current);
+        }}
+        onRenderProcessGone={() => {
+          readyRef.current = false;
+          if (currentBase.current) reloadBridge(currentBase.current);
+        }}
         javaScriptEnabled
         domStorageEnabled
         thirdPartyCookiesEnabled
@@ -208,17 +288,24 @@ export function HostApiWebView({ enabled = true }: Props) {
         originWhitelist={['*']}
         cacheEnabled={false}
         incognito={false}
+        mixedContentMode="always"
+        androidLayerType={Platform.OS === 'android' ? 'hardware' : undefined}
+        allowsFullscreenVideo={false}
+        mediaPlaybackRequiresUserAction
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  hidden: {
+  // Real viewport size off-screen: 1×1 / opacity:0 can skip JS on some OEM WebViews.
+  offscreen: {
     position: 'absolute',
-    width: 1,
-    height: 1,
-    opacity: 0,
+    width: 360,
+    height: 640,
+    left: -10000,
+    top: 0,
+    opacity: 0.02,
     overflow: 'hidden',
   },
 });

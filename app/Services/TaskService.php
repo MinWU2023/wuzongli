@@ -279,6 +279,85 @@ final class TaskService
         ], ['id' => $id]);
     }
 
+    /** 任务是否已 100% 完成（可清理抓取缓存）。 */
+    public function isFullyCompleted(array $task): bool
+    {
+        return (string) ($task['status'] ?? '') === 'completed'
+            || ((string) ($task['stage'] ?? '') === 'done' && (int) ($task['progress'] ?? 0) >= 100);
+    }
+
+    /**
+     * 统计该任务仍保留的抓取缓存条数（非完整 HTML；为提取中间结果 / 页面 URL 列表）。
+     * @return array{companies:int,websites:int,total:int}
+     */
+    public function crawlCacheStats(int $taskId): array
+    {
+        $db = Db::instance();
+        $prefix = $db->prefix();
+        $companies = (int) ($db->value(
+            "SELECT COUNT(*) FROM `{$prefix}companies`
+             WHERE `task_id` = ?
+               AND `raw_json` IS NOT NULL
+               AND TRIM(`raw_json`) NOT IN ('', 'null', '{}')",
+            [$taskId]
+        ) ?? 0);
+        $websites = (int) ($db->value(
+            "SELECT COUNT(*) FROM `{$prefix}websites`
+             WHERE `task_id` = ?
+               AND `pages_json` IS NOT NULL
+               AND TRIM(`pages_json`) NOT IN ('', 'null', '[]')",
+            [$taskId]
+        ) ?? 0);
+
+        return [
+            'companies' => $companies,
+            'websites' => $websites,
+            'total' => $companies + $websites,
+        ];
+    }
+
+    /**
+     * 清理已完成任务的抓取缓存：companies.raw_json、websites.pages_json。
+     * 不删除企业线索与网站记录本身。
+     * @return array{companies:int,websites:int,total:int}
+     */
+    public function clearCrawlCache(int $taskId): array
+    {
+        $task = $this->find($taskId);
+        if (!$this->isFullyCompleted($task)) {
+            throw HttpException::validation('仅 100% 完成的任务可清理抓取缓存数据');
+        }
+
+        $before = $this->crawlCacheStats($taskId);
+        if ($before['total'] === 0) {
+            return $before;
+        }
+
+        $db = Db::instance();
+        $prefix = $db->prefix();
+        $now = now();
+        $db->query(
+            "UPDATE `{$prefix}companies`
+             SET `raw_json` = NULL, `updated_at` = ?
+             WHERE `task_id` = ?
+               AND `raw_json` IS NOT NULL
+               AND TRIM(`raw_json`) NOT IN ('', 'null', '{}')",
+            [$now, $taskId]
+        );
+        $db->query(
+            "UPDATE `{$prefix}websites`
+             SET `pages_json` = NULL, `updated_at` = ?
+             WHERE `task_id` = ?
+               AND `pages_json` IS NOT NULL
+               AND TRIM(`pages_json`) NOT IN ('', 'null', '[]')",
+            [$now, $taskId]
+        );
+
+        $this->log($taskId, 'system', 'info', '已清理抓取缓存数据（提取中间结果 / 页面列表）', $before);
+
+        return $before;
+    }
+
     /**
      * @param array<string, mixed> $context
      */

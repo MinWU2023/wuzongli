@@ -121,11 +121,11 @@ PROMPT,
 
 请提取：
 - company_name：企业官方英文或中文名称。优先页脚、About Us、版权信息中的完整法定/品牌名称；不要返回“Home”“About Us”等导航词。
-- phones：页面中出现的电话/手机/WhatsApp 号码，保留国家码和原始格式，去重；不要提取传真、订单号、日期、邮编。
+- phones：固定返回空数组 []。电话号码由系统只从页面 href="tel:" 与 WhatsApp 链接提取，不要从正文猜号码。
 - emails：真实邮箱地址。
 - linkedin / tiktok / youtube / facebook / instagram：企业官方主页完整 URL，没有则空字符串。不要返回分享按钮、员工个人主页或平台首页。
 - address：公司地址（如页面提供）。
-- whatsapp：WhatsApp 号码或 wa.me 链接，没有则空字符串。
+- whatsapp：固定返回空字符串。WhatsApp 由系统只从 href 链接提取。
 
 如果没有某项信息，返回空字符串或空数组，不要臆造。仅返回：
 {"company_name":"","phones":[],"emails":[],"linkedin":"","tiktok":"","youtube":"","facebook":"","instagram":"","address":"","whatsapp":""}

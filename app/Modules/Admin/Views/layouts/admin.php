@@ -8,6 +8,7 @@ $messages = flashes();
 $navItems = [
     ['key' => 'dashboard', 'label' => '总览', 'href' => '/admin', 'icon' => '<path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6V11h-6v9Zm0-16v5h6V4h-6Z"/>'],
     ['key' => 'tasks', 'label' => '城市任务', 'href' => '/admin/tasks', 'icon' => '<path d="M4 6h16M4 12h10M4 18h7"/><circle cx="19" cy="12" r="2"/><circle cx="15" cy="18" r="2"/>'],
+    ['key' => 'companies', 'label' => '企业列表', 'href' => '/admin/companies', 'icon' => '<path d="M4 21h16M6 21V7l6-3 6 3v14M9 21v-6h6v6M10 10h.01M14 10h.01M10 13h.01M14 13h.01"/>'],
     ['key' => 'relays', 'label' => 'AI 中转站', 'href' => '/admin/relays', 'icon' => '<path d="M12 3v4m0 10v4M5 12H3m18 0h-2M7.05 7.05 5.64 5.64m12.72 12.72-1.41-1.41M7.05 16.95l-1.41 1.41M18.36 5.64l-1.41 1.41"/><circle cx="12" cy="12" r="4"/>'],
     ['key' => 'blocklist', 'label' => '禁止采集名单', 'href' => '/admin/blocklist', 'icon' => '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>'],
     ['key' => 'serper', 'label' => 'Serper 账号', 'href' => '/admin/serper', 'icon' => '<path d="M4 18 9 8l4 6 3-8 4 12"/><path d="M4 21h16"/>'],

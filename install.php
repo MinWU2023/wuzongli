@@ -47,7 +47,7 @@ $form = [
     'ai_base_url' => 'https://api.openai.com/v1',
     'ai_model' => 'gpt-4o-mini',
     'ai_key' => '',
-    'serper_key' => 'a4be645a029169206f66e8024a73361f005fc5ef',
+    'serper_key' => '',
 ];
 $error = null;
 $success = null;
@@ -439,7 +439,7 @@ function env_badge(bool $ok): string
                     <div class="form-section">
                         <div class="section-title"><span>04</span><div><h3>Serper.dev 搜索</h3><p>可选，推荐填写；用搜索 API 替代浏览器抓取 Google</p></div></div>
                         <div class="form-grid">
-                            <label class="field span-4"><span>Serper API Key</span><input type="password" name="serper_key" value="<?= h($form['serper_key']) ?>" placeholder="留空则使用浏览器抓取 Google"><small>密钥加密入库，已预填你提供的 Serper.dev Key，安装后自动启用 Serper 搜索。</small></label>
+                            <label class="field span-4"><span>Serper API Key</span><input type="password" name="serper_key" value="<?= h($form['serper_key']) ?>" placeholder="留空可稍后在后台「Serper 账号」添加"><small>密钥加密入库。也可安装后在后台添加多个账号自动轮换。</small></label>
                         </div>
                         <p class="hint">Serper 提供免费额度，可避免 Google 人机验证。服务器需要能访问 <code>google.serper.dev</code>；也可稍后在后台「系统设置」中配置。</p>
                     </div>

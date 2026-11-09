@@ -57,7 +57,7 @@
         autoRun: true,
         requestDelay: 2500,
         searchProvider: 'serper',
-        serperApiKey: 'a4be645a029169206f66e8024a73361f005fc5ef',
+        serperApiKey: '',
         serperGl: 'us',
         serperHl: 'en',
         aiBaseUrl: '',
@@ -213,9 +213,12 @@
             const stored = await chrome.storage.local.get(STORAGE_KEY);
             const saved = stored[STORAGE_KEY] || {};
             const provider = ['serper', 'server', 'browser'].includes(saved.searchProvider) ? saved.searchProvider : DEFAULT_CONFIG.searchProvider;
-            const serperKey = typeof saved.serperApiKey === 'string' && saved.serperApiKey.trim() !== ''
-                ? saved.serperApiKey.trim()
-                : DEFAULT_CONFIG.serperApiKey;
+            // Drop the old shipped default key that was already out of credits.
+            const legacyDeadKey = 'a4be645a029169206f66e8024a73361f005fc5ef';
+            let serperKey = typeof saved.serperApiKey === 'string' ? saved.serperApiKey.trim() : '';
+            if (serperKey === legacyDeadKey) {
+                serperKey = '';
+            }
             state.config = {
                 ...DEFAULT_CONFIG,
                 ...saved,
@@ -938,8 +941,9 @@
         const page = Number(job.page || 1);
         const pagesTarget = job.auto_pages ? '∞' : Number(job.pages_target || 1);
         const liveInputKey = $('#serperKeyInput') && !$('#settingsModal')?.hidden ? $('#serperKeyInput').value.trim() : '';
-        const apiKey = String(liveInputKey || state.config.serperApiKey || DEFAULT_CONFIG.serperApiKey || '').trim();
+        const apiKey = String(liveInputKey || state.config.serperApiKey || '').trim();
 
+        // Prefer server Serper account pool when the plugin has no explicit key.
         if (apiKey) {
             addLocal('Serper.dev · 「' + query + '」第 ' + page + ' / ' + pagesTarget + ' 页', 'info');
             try {
@@ -996,16 +1000,14 @@
         if (!keywordId) throw new ApiError('服务器没有提供关键词 ID。', 'missing_keyword_id');
         const page = Number(job.page || 1);
         const pagesTarget = job.auto_pages ? '∞' : Number(job.pages_target || 1);
-        const liveInputKey = $('#serperKeyInput') && !$('#settingsModal')?.hidden ? $('#serperKeyInput').value.trim() : '';
-        const serperApiKey = String(liveInputKey || state.config.serperApiKey || DEFAULT_CONFIG.serperApiKey || '').trim();
-        addLocal('Serper · 「' + (job.keyword || '') + '」第 ' + page + ' / ' + pagesTarget + ' 页', 'info');
+        // Do not force a plugin key onto the server — let admin Serper accounts rotate.
+        addLocal('Serper · 「' + (job.keyword || '') + '」第 ' + page + ' / ' + pagesTarget + ' 页（服务端账号池）', 'info');
         const data = await request('/api/tasks/' + taskId + '/serp/serper', {
             method: 'POST',
             timeout: 90000,
             body: {
                 keyword_id: keywordId,
-                page,
-                serper_api_key: serperApiKey
+                page
             }
         });
         if (Number(data.parsed || 0) > 0) {
@@ -1585,7 +1587,7 @@
             $('#searchProviderInput').value = state.config.searchProvider || 'serper';
         }
         if ($('#serperKeyInput')) {
-            $('#serperKeyInput').value = state.config.serperApiKey || DEFAULT_CONFIG.serperApiKey;
+            $('#serperKeyInput').value = state.config.serperApiKey || '';
             $('#serperKeyInput').type = 'password';
         }
         if ($('#toggleSerperKey')) {
@@ -1653,7 +1655,7 @@
         const base = normalizeBase($('#apiBaseInput').value);
         const key = $('#apiKeyInput').value.trim();
         const searchProvider = $('#searchProviderInput') ? $('#searchProviderInput').value : 'serper';
-        const serperKey = $('#serperKeyInput') ? $('#serperKeyInput').value.trim() : DEFAULT_CONFIG.serperApiKey;
+        const serperKey = $('#serperKeyInput') ? $('#serperKeyInput').value.trim() : (state.config.serperApiKey || '');
         const aiBaseUrl = $('#aiBaseUrlInput') ? $('#aiBaseUrlInput').value.trim().replace(/\/+$/, '') : '';
         const aiModel = $('#aiModelInput') ? $('#aiModelInput').value.trim() : 'gpt-4o-mini';
         const aiApiKey = $('#aiApiKeyInput') ? $('#aiApiKeyInput').value.trim() : '';
@@ -1682,7 +1684,7 @@
         state.config.autoRun = $('#autoRunInput').checked;
         state.config.requestDelay = Math.max(300, Math.min(15000, Number($('#delayInput').value || 2500)));
         state.config.searchProvider = ['serper', 'server', 'browser'].includes(searchProvider) ? searchProvider : 'serper';
-        state.config.serperApiKey = serperKey || DEFAULT_CONFIG.serperApiKey;
+        state.config.serperApiKey = serperKey;
         if (aiBaseUrl) state.config.aiBaseUrl = aiBaseUrl;
         if (aiModel) state.config.aiModel = aiModel;
         if (aiApiKey) state.config.aiApiKey = aiApiKey;

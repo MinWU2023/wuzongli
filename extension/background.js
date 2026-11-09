@@ -44,7 +44,7 @@ chrome.runtime.onInstalled.addListener(async () => {
                 autoRun: true,
                 requestDelay: 2500,
                 searchProvider: 'serper',
-                serperApiKey: 'a4be645a029169206f66e8024a73361f005fc5ef',
+                serperApiKey: '',
                 serperGl: 'us',
                 serperHl: 'en'
             }
@@ -99,8 +99,15 @@ async function handleMessage(message) {
     }
 }
 
-/** Persistent hidden tab on /bridge — required for InfinityFree aes.js cookies. */
+/**
+ * InfinityFree requires a real first-party document (aes.js / __test cookie).
+ * We use a tiny minimized popup window (not a main-window tab), and auto-close
+ * it after a short idle so users are not left staring at /bridge.
+ */
 let hostApiTabId = null;
+let hostApiWindowId = null;
+let hostApiIdleTimer = null;
+const HOST_BRIDGE_IDLE_MS = 45000;
 
 function isSecurityChallengeHtml(text) {
     if (!text || typeof text !== 'string') return false;
@@ -120,15 +127,60 @@ function bridgeUrl(base) {
     return normalizeApiBase(base) + '/bridge?_=' + Date.now();
 }
 
+function clearHostBridgeIdleTimer() {
+    if (hostApiIdleTimer) {
+        clearTimeout(hostApiIdleTimer);
+        hostApiIdleTimer = null;
+    }
+}
+
+function scheduleHostBridgeClose() {
+    clearHostBridgeIdleTimer();
+    hostApiIdleTimer = setTimeout(() => {
+        closeHostBridgeQuietly().catch(() => {});
+    }, HOST_BRIDGE_IDLE_MS);
+}
+
+async function closeHostBridgeQuietly() {
+    clearHostBridgeIdleTimer();
+    const tabId = hostApiTabId;
+    const windowId = hostApiWindowId;
+    hostApiTabId = null;
+    hostApiWindowId = null;
+    if (typeof tabId === 'number') {
+        await closeTabQuietly(tabId);
+    }
+    if (typeof windowId === 'number') {
+        try {
+            await chrome.windows.remove(windowId);
+        } catch (error) {
+            // Already closed.
+        }
+    }
+}
+
+async function minimizeHostBridgeWindow(windowId) {
+    if (typeof windowId !== 'number') return;
+    try {
+        await chrome.windows.update(windowId, { focused: false, state: 'minimized' });
+    } catch (error) {
+        try {
+            await chrome.windows.update(windowId, { focused: false, width: 1, height: 1, left: 0, top: 0 });
+        } catch (e) {
+            // Platform may reject tiny/minimized popups.
+        }
+    }
+}
+
 /**
- * Open / keep a background tab on /bridge so InfinityFree JS cookie checks pass,
- * then prove /api/health returns JSON before API calls.
+ * Open / reuse a hidden popup window on /bridge (first-party cookies).
  */
 async function ensureHostApiTab(baseUrl, forceReload = false) {
     const base = normalizeApiBase(baseUrl);
     assertHttpUrl(base);
     const origin = new URL(base).origin;
     const warmUrl = bridgeUrl(base);
+    clearHostBridgeIdleTimer();
 
     if (!forceReload && typeof hostApiTabId === 'number') {
         try {
@@ -136,16 +188,25 @@ async function ensureHostApiTab(baseUrl, forceReload = false) {
             if (existing && typeof existing.id === 'number') {
                 const tabUrl = String(existing.url || '');
                 if (tabUrl.startsWith(origin)) {
+                    if (typeof existing.windowId === 'number') {
+                        hostApiWindowId = existing.windowId;
+                        await minimizeHostBridgeWindow(existing.windowId);
+                    }
                     const ready = await waitBridgeReady(hostApiTabId, 12000);
-                    if (ready) return hostApiTabId;
+                    if (ready) {
+                        scheduleHostBridgeClose();
+                        return hostApiTabId;
+                    }
                     await chrome.tabs.update(hostApiTabId, { url: warmUrl });
                     await waitForTab(hostApiTabId, 25000);
                     await waitBridgeReady(hostApiTabId, 25000);
+                    scheduleHostBridgeClose();
                     return hostApiTabId;
                 }
             }
         } catch (error) {
             hostApiTabId = null;
+            hostApiWindowId = null;
         }
     }
 
@@ -154,23 +215,60 @@ async function ensureHostApiTab(baseUrl, forceReload = false) {
             await chrome.tabs.update(hostApiTabId, { url: warmUrl });
             await waitForTab(hostApiTabId, 25000);
             await waitBridgeReady(hostApiTabId, 25000);
+            if (typeof hostApiWindowId === 'number') {
+                await minimizeHostBridgeWindow(hostApiWindowId);
+            }
+            scheduleHostBridgeClose();
             return hostApiTabId;
         } catch (error) {
-            try { await closeTabQuietly(hostApiTabId); } catch (e) {}
-            hostApiTabId = null;
+            await closeHostBridgeQuietly();
         }
     }
 
-    const created = await backgroundTab(warmUrl);
-    if (typeof created.id !== 'number') {
-        throw new Error('无法打开 /bridge 标签页以通过主机安全校验');
+    // Prefer a dedicated minimized popup window so /bridge does not appear
+    // as a normal tab in the user's main browser window.
+    let createdTab = null;
+    try {
+        const win = await chrome.windows.create({
+            url: warmUrl,
+            type: 'popup',
+            focused: false,
+            width: 320,
+            height: 200,
+            left: 0,
+            top: 0
+        });
+        if (win && typeof win.id === 'number') {
+            hostApiWindowId = win.id;
+            await minimizeHostBridgeWindow(win.id);
+        }
+        const tab = win && Array.isArray(win.tabs) ? win.tabs[0] : null;
+        if (tab && typeof tab.id === 'number') {
+            createdTab = tab;
+        }
+    } catch (error) {
+        createdTab = null;
     }
-    hostApiTabId = created.id;
+
+    if (!createdTab) {
+        // Fallback: inactive tab in a normal window (older Chrome / restricted platforms).
+        createdTab = await backgroundTab(warmUrl);
+    }
+    if (!createdTab || typeof createdTab.id !== 'number') {
+        throw new Error('无法打开主机桥接窗口以通过安全校验');
+    }
+    hostApiTabId = createdTab.id;
+    if (typeof createdTab.windowId === 'number') {
+        hostApiWindowId = createdTab.windowId;
+        await minimizeHostBridgeWindow(createdTab.windowId);
+    }
     await waitForTab(hostApiTabId, 25000);
     const ok = await waitBridgeReady(hostApiTabId, 28000);
     if (!ok) {
+        await closeHostBridgeQuietly();
         throw new Error('主机安全校验未通过：/bridge 未能访问 /api/health');
     }
+    scheduleHostBridgeClose();
     return hostApiTabId;
 }
 
@@ -203,7 +301,7 @@ async function waitBridgeReady(tabId, timeoutMs) {
 }
 
 /**
- * Open the API host bridge tab so InfinityFree-style JS cookie checks complete.
+ * Warm the host bridge (minimized popup). Auto-closes after idle.
  */
 async function warmHost(url) {
     const base = normalizeApiBase(url).replace(/\/api\/health$/i, '').replace(/\/bridge$/i, '');
@@ -212,7 +310,7 @@ async function warmHost(url) {
 }
 
 /**
- * Run fetch via window.__GLE_BRIDGE__ inside the /bridge tab (first-party cookies).
+ * Run fetch via window.__GLE_BRIDGE__ inside the hidden /bridge window.
  */
 async function hostApiFetch(message) {
     const base = normalizeApiBase(message.base);
@@ -242,7 +340,6 @@ async function hostApiFetch(message) {
                         error: result && result.error ? String(result.error) : ''
                     };
                 }
-                // Fallback if old page without bridge object.
                 const controller = new AbortController();
                 const timer = setTimeout(() => controller.abort(), opts.timeout);
                 try {
@@ -275,35 +372,40 @@ async function hostApiFetch(message) {
         return injection && injection[0] ? injection[0].result : null;
     };
 
-    let tabId = await ensureHostApiTab(base, false);
-    let result = await runOnce(tabId);
-    const needsRetry = !result
-        || (result.error && !result.text)
-        || isSecurityChallengeHtml(result.text)
-        || result.error === 'host_security_challenge'
-        || result.error === 'host_bridge_not_ready';
+    try {
+        let tabId = await ensureHostApiTab(base, false);
+        let result = await runOnce(tabId);
+        const needsRetry = !result
+            || (result.error && !result.text)
+            || isSecurityChallengeHtml(result.text)
+            || result.error === 'host_security_challenge'
+            || result.error === 'host_bridge_not_ready';
 
-    if (needsRetry) {
-        tabId = await ensureHostApiTab(base, true);
-        result = await runOnce(tabId);
-    }
+        if (needsRetry) {
+            tabId = await ensureHostApiTab(base, true);
+            result = await runOnce(tabId);
+        }
 
-    if (!result) {
-        throw new Error('站点桥接页未能执行 API 请求');
+        if (!result) {
+            throw new Error('站点桥接页未能执行 API 请求');
+        }
+        if (result.error && !result.text) {
+            throw new Error(result.error === 'host_security_challenge'
+                ? '主机安全校验仍未通过，请稍后重试或换主机'
+                : result.error);
+        }
+        if (isSecurityChallengeHtml(result.text)) {
+            throw new Error('主机开启了浏览器安全校验（InfinityFree），桥接页重试后仍失败');
+        }
+        return {
+            status: Number(result.status || 0),
+            ok: !!result.ok,
+            text: String(result.text || '')
+        };
+    } finally {
+        // Keep warm during continuous pipeline calls; close once idle.
+        scheduleHostBridgeClose();
     }
-    if (result.error && !result.text) {
-        throw new Error(result.error === 'host_security_challenge'
-            ? '主机安全校验仍未通过，请稍后重试或换主机'
-            : result.error);
-    }
-    if (isSecurityChallengeHtml(result.text)) {
-        throw new Error('主机开启了浏览器安全校验（InfinityFree），桥接页重试后仍失败');
-    }
-    return {
-        status: Number(result.status || 0),
-        ok: !!result.ok,
-        text: String(result.text || '')
-    };
 }
 
 async function fetchSerper(message) {

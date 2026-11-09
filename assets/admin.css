@@ -409,8 +409,12 @@ h3 { font-size: 17px; letter-spacing: -.02em; }
 .table-number.accent { color: var(--green); }
 .table-sub { display: block; color: var(--muted-2); font-size: 8.5px; }
 .table-date { color: var(--muted); font-size: 10px; }
-.table-actions { text-align: right; }
+.table-actions { text-align: right; display: flex; justify-content: flex-end; align-items: center; gap: 10px; flex-wrap: wrap; }
+.table-actions .inline-form { display: inline; margin: 0; }
+.table-actions .inline-form button { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
+.table-actions .inline-form button:disabled { opacity: .45; cursor: not-allowed; }
 .row-action { color: var(--blue); font-size: 10.5px; font-weight: 650; white-space: nowrap; }
+.row-action.danger { color: var(--red); }
 .pagination { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10.5px; }
 .pagination > div { display: flex; gap: 7px; }
 .page-btn { padding: 6px 10px; border-radius: 7px; background: #f2f5fa; color: var(--text); font-size: 10px; }

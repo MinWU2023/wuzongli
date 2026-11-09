@@ -103,13 +103,90 @@
     const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     const appBase = () => document.body.getAttribute('data-base') || '';
 
+    document.addEventListener('submit', async (event) => {
+        const form = event.target.closest('form.js-company-note-form');
+        if (!form) return;
+        event.preventDefault();
+        event.stopPropagation();
+
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn && submitBtn.disabled) return;
+
+        const noteInput = form.querySelector('input[name="note"]');
+        const dateInput = form.querySelector('input[name="note_date"]');
+        const note = (noteInput?.value || '').trim();
+        const noteDate = (dateInput?.value || '').trim();
+        if (!note) {
+            toast('请填写备注内容', 'err');
+            noteInput?.focus();
+            return;
+        }
+        if (!noteDate) {
+            toast('请选择备注日期', 'err');
+            dateInput?.focus();
+            return;
+        }
+
+        const originalLabel = submitBtn ? submitBtn.textContent : '保存';
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = '保存中…';
+        }
+
+        try {
+            const res = await fetch(form.getAttribute('action') || (appBase() + '/admin/companies/notes'), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    _token: form.querySelector('input[name="_token"]')?.value || csrfToken(),
+                    company_id: Number(form.querySelector('input[name="company_id"]')?.value || 0),
+                    phone: form.querySelector('input[name="phone"]')?.value || '',
+                    note,
+                    note_date: noteDate,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.ok === false) {
+                throw new Error(data.message || ('保存失败 (' + res.status + ')'));
+            }
+
+            const saved = data.note || {};
+            const today = form.getAttribute('data-today') || '';
+            const meta = form.parentElement?.querySelector('.js-note-meta');
+            if (meta) {
+                if (saved.note_date && saved.note_date === today) {
+                    meta.textContent = '今日已保存 · 刚刚';
+                } else if (saved.note_date && saved.note) {
+                    meta.textContent = '最近备注 ' + saved.note_date + '：' + saved.note;
+                }
+            }
+            if (noteInput && saved.note_date === today) {
+                noteInput.value = saved.note || note;
+            }
+            toast(data.message || '备注已保存', 'ok');
+        } catch (error) {
+            toast(error instanceof Error ? error.message : '备注保存失败', 'err');
+        } finally {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalLabel;
+            }
+        }
+    });
+
     document.addEventListener('dblclick', async (event) => {
         const btn = event.target.closest('[data-dial-phone]');
         if (!btn || btn.classList.contains('pending')) return;
         event.preventDefault();
         const phone = btn.getAttribute('data-dial-phone') || '';
         const taskId = Number(btn.getAttribute('data-task-id') || 0);
-        if (!phone || !taskId) {
+        const companyId = Number(btn.getAttribute('data-company-id') || 0);
+        if (!phone || (!taskId && !companyId)) {
             toast('号码无效', 'err');
             return;
         }
@@ -117,8 +194,11 @@
         btn.classList.add('pending');
         btn.classList.remove('ok', 'err');
         btn.textContent = '推送中…';
+        const endpoint = taskId > 0
+            ? (appBase() + '/admin/tasks/' + taskId + '/dial')
+            : (appBase() + '/admin/companies/dial');
         try {
-            const res = await fetch(appBase() + '/admin/tasks/' + taskId + '/dial', {
+            const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -129,7 +209,8 @@
                 body: JSON.stringify({
                     _token: csrfToken(),
                     phone,
-                    company_id: Number(btn.getAttribute('data-company-id') || 0) || undefined,
+                    company_id: companyId || undefined,
+                    task_id: taskId || undefined,
                     company_name: btn.getAttribute('data-company-name') || '',
                     city: btn.getAttribute('data-city') || '',
                     domain: btn.getAttribute('data-domain') || '',

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "外贸客 · Google 线索引擎",
   "short_name": "外贸客",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "输入城市，自动完成 Google 拓域、AI 企业筛选、官网页面识别与联系方式提取。",
   "action": {
     "default_title": "打开外贸客",

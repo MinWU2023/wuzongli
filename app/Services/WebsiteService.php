@@ -144,13 +144,15 @@ final class WebsiteService
         }
         $pagesText = Str::limit($pagesText, 20000, '');
 
+        // Phones: ONLY href="tel:..." and WhatsApp href links. No body regex / AI phones.
+        $linkContacts = $this->extractTelAndWhatsappPhones($allHtml);
         $regex = $this->regexContacts($allHtml, $pagesText);
         $ai = [];
         $aiFallback = false;
         try {
             $ai = $this->ai->extractContacts($task, $website, $pagesText);
         } catch (\Throwable $e) {
-            // Keep the pipeline moving when the AI relay is unreachable; regex still finds phones/emails.
+            // Keep the pipeline moving when the AI relay is unreachable; link phones / regex emails still work.
             $aiFallback = true;
             Logger::warning('contact extraction AI failed, using regex fallback', [
                 'domain' => $domain,
@@ -176,9 +178,8 @@ final class WebsiteService
         if ($companyName === '') {
             $companyName = $this->fallbackCompanyName($titles, $allHtml);
         }
-        $phones = $this->mergeList($this->asStringList($ai['phones'] ?? []), $regex['phones']);
+        $phones = array_slice($this->dedupePhones($linkContacts['phones']), 0, 6);
         $emails = $this->mergeList($this->asStringList($ai['emails'] ?? []), $regex['emails']);
-        $phones = array_slice($this->dedupePhones($phones), 0, 6);
         $emails = array_slice(array_values(array_unique(array_filter($emails, static fn (string $email): bool => (bool) filter_var($email, FILTER_VALIDATE_EMAIL)))), 0, 6);
 
         $social = [];
@@ -190,14 +191,9 @@ final class WebsiteService
             $social[$network] = $value;
         }
         $address = Str::limit(trim((string) ($ai['address'] ?? '')), 500, '');
-        $whatsapp = trim((string) ($ai['whatsapp'] ?? ''));
-        if ($whatsapp === '') {
-            $whatsapp = $regex['whatsapp'][0] ?? '';
-        }
-        if ($whatsapp !== '' && preg_match('#wa\.me/(\d+)#i', $whatsapp, $m)) {
-            $whatsapp = '+' . $m[1];
-        } elseif ($whatsapp !== '' && preg_match('#api\.whatsapp\.com/send\?phone=(\d+)#i', $whatsapp, $m)) {
-            $whatsapp = '+' . $m[1];
+        $whatsapp = $linkContacts['whatsapp_phones'][0] ?? '';
+        if ($whatsapp === '' && isset($linkContacts['whatsapp_links'][0])) {
+            $whatsapp = $this->phoneFromWhatsappUrl((string) $linkContacts['whatsapp_links'][0]);
         }
         if ($whatsapp !== '' && !preg_match('/^\+?[\d\s\-().]{7,24}$/', $whatsapp)) {
             $whatsapp = '';
@@ -207,6 +203,7 @@ final class WebsiteService
         $raw = [
             'ai' => $ai,
             'regex' => $regex,
+            'link_phones' => $linkContacts,
             'page_titles' => $titles,
         ];
         $row = [
@@ -381,11 +378,114 @@ final class WebsiteService
         return '';
     }
 
-    /** @return array<string, array<int, string>> */
-    private function regexContacts(string $html, string $text): array
+    /**
+     * Phone numbers come ONLY from clickable links:
+     * - href="tel:..."
+     * - WhatsApp href (wa.me / api.whatsapp.com/send)
+     *
+     * @return array{phones: array<int, string>, whatsapp_links: array<int, string>, whatsapp_phones: array<int, string>}
+     */
+    private function extractTelAndWhatsappPhones(string $html): array
     {
         $haystack = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $textDecoded = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $phones = [];
+        $whatsappLinks = [];
+        $whatsappPhones = [];
+
+        // href="tel:+86..." / href='tel:...'
+        if (preg_match_all('/\bhref\s*=\s*(["\'])\s*tel:([^"\']+)\1/i', $haystack, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $phone = $this->normalizeHrefPhone((string) ($match[2] ?? ''));
+                if ($phone !== '') {
+                    $phones[] = $phone;
+                }
+            }
+        }
+        // Unquoted href=tel:+86...
+        if (preg_match_all('/\bhref\s*=\s*tel:([^\s>]+)/i', $haystack, $matches2)) {
+            foreach ($matches2[1] ?? [] as $raw) {
+                $phone = $this->normalizeHrefPhone((string) $raw);
+                if ($phone !== '') {
+                    $phones[] = $phone;
+                }
+            }
+        }
+
+        // WhatsApp links inside href="..."
+        if (preg_match_all(
+            '/\bhref\s*=\s*(["\'])\s*((?:https?:)?\/\/(?:wa\.me|api\.whatsapp\.com\/send)[^"\']*)\1/i',
+            $haystack,
+            $waMatches,
+            PREG_SET_ORDER
+        )) {
+            foreach ($waMatches as $match) {
+                $url = html_entity_decode(trim((string) ($match[2] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                if ($url === '') {
+                    continue;
+                }
+                $url = preg_match('#^https?://#i', $url) ? $url : 'https:' . ltrim($url, '/');
+                $whatsappLinks[] = $url;
+                $waPhone = $this->phoneFromWhatsappUrl($url);
+                if ($waPhone !== '') {
+                    $whatsappPhones[] = $waPhone;
+                    $phones[] = $waPhone;
+                }
+            }
+        }
+
+        return [
+            'phones' => $this->dedupePhones($phones),
+            'whatsapp_links' => array_values(array_unique($whatsappLinks)),
+            'whatsapp_phones' => $this->dedupePhones($whatsappPhones),
+        ];
+    }
+
+    private function normalizeHrefPhone(string $raw): string
+    {
+        $raw = html_entity_decode(trim($raw), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $raw = rawurldecode($raw);
+        // Drop extension / query: tel:+8613812345678;ext=12 or ?text=
+        $raw = preg_replace('/[;?&#].*$/', '', $raw) ?? $raw;
+        $raw = trim($raw, " \t\n\r\0\x0B\"'<>");
+        if ($raw === '') {
+            return '';
+        }
+        $hasPlus = str_starts_with($raw, '+');
+        $digits = preg_replace('/\D+/', '', $raw) ?? '';
+        if (strlen($digits) < 7 || strlen($digits) > 18) {
+            return '';
+        }
+        // Skip obvious dates like 20240115.
+        if (preg_match('/^(?:19|20)\d{2}[01]\d[0-3]\d$/', $digits)) {
+            return '';
+        }
+        return $hasPlus ? ('+' . $digits) : $digits;
+    }
+
+    private function phoneFromWhatsappUrl(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return '';
+        }
+        if (preg_match('#wa\.me/(\+?\d{7,18})#i', $url, $m)) {
+            return $this->normalizeHrefPhone($m[1]);
+        }
+        if (preg_match('#[?&]phone=(\+?\d{7,18})#i', $url, $m)) {
+            return $this->normalizeHrefPhone($m[1]);
+        }
+        return '';
+    }
+
+    /**
+     * Emails + social only (phones intentionally omitted — see extractTelAndWhatsappPhones).
+     *
+     * @return array<string, array<int, string>>
+     */
+    private function regexContacts(string $html, string $text): array
+    {
+        unset($text); // phones no longer scan page body text
+        $haystack = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
 
         preg_match_all('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,24}/i', $haystack, $emailMatches);
         $emails = array_values(array_unique(array_map('strtolower', $emailMatches[0] ?? [])));
@@ -394,29 +494,6 @@ final class WebsiteService
                 && !str_contains($email, 'example.com')
                 && !str_contains($email, 'sentry');
         }));
-
-        $phones = [];
-        $phoneSource = $textDecoded . "\n" . strip_tags($haystack);
-        $patterns = [
-            '/(?:\+?86[\s\-]?)?1[3-9]\d{9}/u',
-            '/\+\d{1,3}[\s\-().]{0,3}\d(?:[\s\-().]?\d){6,14}/u',
-            '/(?:^|[\s>(])(0\d{2,3}[\s\-]?\d{7,8})(?=$|[\s<).,])/u',
-        ];
-        foreach ($patterns as $pattern) {
-            if (preg_match_all($pattern, $phoneSource, $matches)) {
-                foreach ($matches[0] as $phone) {
-                    $phone = trim($phone, " \t\n\r\0\x0B.,;:()[]<>");
-                    $digits = preg_replace('/\D+/', '', $phone) ?? '';
-                    if (strlen($digits) < 8 || strlen($digits) > 18) {
-                        continue;
-                    }
-                    if (preg_match('/^(?:19|20)\d{2}[01]\d[0-3]\d$/', $digits)) {
-                        continue;
-                    }
-                    $phones[] = preg_replace('/\s+/', ' ', $phone) ?? $phone;
-                }
-            }
-        }
 
         $social = [
             'linkedin' => $this->matchSocial($haystack, 'linkedin'),
@@ -429,7 +506,7 @@ final class WebsiteService
         ];
 
         return [
-            'phones' => $phones,
+            'phones' => [],
             'emails' => $emails,
             'linkedin' => $social['linkedin'],
             'tiktok' => $social['tiktok'],
@@ -472,12 +549,26 @@ final class WebsiteService
     /** @return array<int, string> */
     private function matchWhatsapp(string $html): array
     {
-        preg_match_all('#(?:https?:)?//(?:wa\.me|api\.whatsapp\.com/send)[^\s"\'<>]+#i', $html, $matches);
+        // Prefer real href attributes; fall back to any wa.me URL in markup.
         $values = [];
-        foreach ($matches[0] ?? [] as $match) {
-            $match = html_entity_decode(trim($match, " \t\n\r\0\x0B\"'<>"), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-            $match = preg_match('#^https?://#i', $match) ? $match : 'https:' . $match;
-            $values[] = $match;
+        if (preg_match_all(
+            '/\bhref\s*=\s*(["\'])\s*((?:https?:)?\/\/(?:wa\.me|api\.whatsapp\.com\/send)[^"\']*)\1/i',
+            $html,
+            $matches
+        )) {
+            foreach ($matches[2] ?? [] as $match) {
+                $match = html_entity_decode(trim((string) $match, " \t\n\r\0\x0B\"'<>"), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                $match = preg_match('#^https?://#i', $match) ? $match : 'https:' . ltrim($match, '/');
+                $values[] = $match;
+            }
+        }
+        if ($values === []) {
+            preg_match_all('#(?:https?:)?//(?:wa\.me|api\.whatsapp\.com/send)[^\s"\'<>]+#i', $html, $fallback);
+            foreach ($fallback[0] ?? [] as $match) {
+                $match = html_entity_decode(trim($match, " \t\n\r\0\x0B\"'<>"), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                $match = preg_match('#^https?://#i', $match) ? $match : 'https:' . $match;
+                $values[] = $match;
+            }
         }
         return array_values(array_unique($values));
     }

@@ -88,10 +88,10 @@ $base = $basePath === '' ? '' : $basePath;
     async function prove(maxTries) {
         if (proving) return proving;
         proving = (async function () {
-            var tries = Math.max(3, Math.min(12, maxTries || 8));
+            var tries = Math.max(4, Math.min(16, maxTries || 10));
             for (var i = 0; i < tries; i++) {
                 try {
-                    var response = await fetch(originBase + '/api/health', {
+                    var response = await fetch(originBase + '/api/health?_=' + Date.now(), {
                         method: 'GET',
                         credentials: 'include',
                         cache: 'no-store',
@@ -103,7 +103,12 @@ $base = $basePath === '' ? '' : $basePath;
                     var text = await response.text();
                     if (isChallenge(text)) {
                         setStatus('waiting host security… ' + (i + 1) + '/' + tries);
-                        await sleep(700 + i * 200);
+                        // InfinityFree rotates __test; give aes.js time, then soft-reload once mid-loop.
+                        if (i === 5 && !reloadScheduled) {
+                            scheduleReload('prove_mid_challenge');
+                            return false;
+                        }
+                        await sleep(900 + i * 250);
                         continue;
                     }
                     if (looksJson(text)) {
@@ -114,7 +119,7 @@ $base = $basePath === '' ? '' : $basePath;
                 } catch (e) {
                     setStatus('health error… ' + (i + 1) + '/' + tries);
                 }
-                await sleep(600 + i * 150);
+                await sleep(700 + i * 180);
             }
             scheduleReload('prove_failed');
             return false;
@@ -186,7 +191,7 @@ $base = $basePath === '' ? '' : $basePath;
     };
 
     // Boot: wait a beat so InfinityFree aes.js can set __test, then prove.
-    setTimeout(function () { prove(10); }, 500);
+    setTimeout(function () { prove(12); }, 800);
     // Cookie parameters rotate; re-prove periodically while the tab stays open.
     setInterval(function () {
         if (!reloadScheduled) prove(4);

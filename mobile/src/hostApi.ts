@@ -34,6 +34,7 @@ export type HostBridgeHandlers = {
 };
 
 let bridge: HostBridgeHandlers | null = null;
+const bridgeWaiters: Array<() => void> = [];
 const pending = new Map<string, Pending>();
 let warmPromise: Promise<void> | null = null;
 let lastWarmBase = '';
@@ -42,6 +43,33 @@ let forceBridge = false;
 
 export function registerHostBridge(handlers: HostBridgeHandlers | null) {
   bridge = handlers;
+  if (handlers) {
+    const waiters = bridgeWaiters.splice(0);
+    waiters.forEach((wake) => {
+      try {
+        wake();
+      } catch {
+        // ignore
+      }
+    });
+  }
+}
+
+function whenBridgeMounted(timeoutMs = 20000): Promise<HostBridgeHandlers> {
+  if (bridge) return Promise.resolve(bridge);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const idx = bridgeWaiters.indexOf(wake);
+      if (idx >= 0) bridgeWaiters.splice(idx, 1);
+      reject(new Error('主机安全桥接未就绪（WebView 未挂载），请重启 App'));
+    }, timeoutMs);
+    const wake = () => {
+      clearTimeout(timer);
+      if (bridge) resolve(bridge);
+      else reject(new Error('主机安全桥接未就绪（WebView 未挂载），请重启 App'));
+    };
+    bridgeWaiters.push(wake);
+  });
 }
 
 export function setForceHostBridge(value: boolean) {
@@ -98,10 +126,11 @@ export async function warmHost(baseUrl: string): Promise<void> {
   const base = String(baseUrl || '')
     .trim()
     .replace(/\/+$/, '');
-  if (!base || !bridge) return;
+  if (!base) return;
+  const handlers = await whenBridgeMounted(20000);
   if (warmPromise && lastWarmBase === base) return warmPromise;
   lastWarmBase = base;
-  warmPromise = bridge.warm(base).catch((err) => {
+  warmPromise = handlers.warm(base).catch((err) => {
     warmPromise = null;
     lastWarmBase = '';
     throw err;
@@ -126,9 +155,7 @@ export async function hostApiFetch(options: {
   body?: string | null;
   timeout?: number;
 }): Promise<{ status: number; text: string }> {
-  if (!bridge) {
-    throw new Error('主机安全桥接未就绪（WebView 未挂载）');
-  }
+  const handlers = await whenBridgeMounted(20000);
   const base = String(options.base || '')
     .trim()
     .replace(/\/+$/, '');
@@ -142,9 +169,9 @@ export async function hostApiFetch(options: {
       const timer = setTimeout(() => {
         pending.delete(id);
         reject(new Error('主机桥接请求超时'));
-      }, timeout + 8000);
+      }, timeout + 12000);
       pending.set(id, { resolve, reject, timer });
-      bridge!
+      handlers
         .fetch({
           id,
           url: base + path,
@@ -170,23 +197,27 @@ export async function hostApiFetch(options: {
       result.error === 'bridge_missing' ||
       isSecurityChallengeHtml(result.text));
 
-  if (challenge) {
+  if (challenge || isSecurityChallengeHtml(result.text)) {
     forceBridge = true;
     reloadHostBridge(base);
+    // Give aes.js / cookie redirect a full cycle before retrying.
+    await new Promise((r) => setTimeout(r, 1200));
     await warmHost(base);
     result = await run();
   }
 
   if (result.error && !result.text) {
     throw new Error(
-      result.error === 'host_security_challenge'
-        ? '主机安全校验仍未通过，请稍后重试'
+      result.error === 'host_security_challenge' || result.error === 'host_bridge_not_ready'
+        ? '主机开启了浏览器安全校验(常见于InfinityFree)。请确认App已更新，或换可直连的主机。'
         : result.error
     );
   }
   if (isSecurityChallengeHtml(result.text)) {
     forceBridge = true;
-    throw new Error('主机开启了浏览器安全校验（InfinityFree），桥接重试后仍失败');
+    throw new Error(
+      '主机开启了浏览器安全校验(常见于InfinityFree)。请确认App已更新，或换可直连的主机。'
+    );
   }
 
   forceBridge = true;

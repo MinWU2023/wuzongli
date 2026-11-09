@@ -72,9 +72,22 @@ final class SerperService
         $tried = [];
         $lastError = null;
 
-        // 显式覆盖 Key（插件旧逻辑）时不做账号轮换
-        if ($overrideApiKey !== null && trim($overrideApiKey) !== '') {
-            return $this->requestOnce($query, $page, $language, trim($overrideApiKey), self::endpoint(), null, null);
+        // Optional plugin override: try once, then fall through to server account pool.
+        // Never skip the pool entirely — the extension used to ship a dead default key.
+        $override = $overrideApiKey !== null ? trim($overrideApiKey) : '';
+        if ($override !== '') {
+            try {
+                return $this->requestOnce($query, $page, $language, $override, self::endpoint(), null, 'plugin-override');
+            } catch (HttpException $e) {
+                $lastError = $e;
+                if (!in_array($e->errorCode, ['serper_unauthorized', 'serper_rate_limited', 'serper_exhausted'], true)) {
+                    throw $e;
+                }
+                Logger::info('Serper override key failed, falling back to account pool', [
+                    'reason' => $e->errorCode,
+                    'message' => $e->getMessage(),
+                ]);
+            }
         }
 
         for ($attempt = 0; $attempt < 8; $attempt++) {
@@ -89,7 +102,12 @@ final class SerperService
             $tried[$accountId] = true;
             $apiKey = (string) ($current['api_key'] ?? '');
             if ($apiKey === '') {
-                $accounts->rotateAfterFailure($accountId, 'API Key 为空', 'error');
+                $accounts->rotateAfterFailure($accountId, 'API Key 为空或解密失败（请检查 app.key 是否与写入时一致）', 'error');
+                continue;
+            }
+            // Skip override key if it already failed above.
+            if ($override !== '' && hash_equals($override, $apiKey)) {
+                $accounts->rotateAfterFailure($accountId, '与已失败的插件 Key 相同', 'exhausted');
                 continue;
             }
             try {
@@ -106,7 +124,7 @@ final class SerperService
                 return $result;
             } catch (HttpException $e) {
                 $lastError = $e;
-                if (in_array($e->errorCode, ['serper_unauthorized', 'serper_rate_limited'], true)) {
+                if (in_array($e->errorCode, ['serper_unauthorized', 'serper_rate_limited', 'serper_exhausted'], true)) {
                     $status = $e->errorCode === 'serper_unauthorized' ? 'error' : 'exhausted';
                     $next = $accounts->rotateAfterFailure($accountId, $e->getMessage(), $status);
                     if ($next === null) {
@@ -206,12 +224,23 @@ final class SerperService
         if ($status === 401 || $status === 403) {
             throw new HttpException(502, 'Serper API Key 无效或已过期。', 'serper_unauthorized', ['status' => $status]);
         }
-        if ($status === 429) {
-            throw new HttpException(502, 'Serper 请求过于频繁或额度不足。', 'serper_rate_limited', ['status' => $status]);
+        $message = (string) ($decoded['message'] ?? $decoded['error'] ?? ('HTTP ' . $status));
+        $messageLower = strtolower($message);
+        $creditsGone = str_contains($messageLower, 'not enough credit')
+            || str_contains($messageLower, 'insufficient credit')
+            || str_contains($messageLower, 'out of credit')
+            || str_contains($messageLower, 'no credits')
+            || (str_contains($messageLower, 'credit') && str_contains($messageLower, 'exhaust'));
+        if ($status === 429 || $creditsGone) {
+            throw new HttpException(
+                502,
+                $creditsGone ? ('Serper 额度不足：' . Str::limit($message, 200)) : 'Serper 请求过于频繁或额度不足。',
+                $creditsGone ? 'serper_exhausted' : 'serper_rate_limited',
+                ['status' => $status]
+            );
         }
         if ($status < 200 || $status >= 300) {
-            $message = $decoded['message'] ?? $decoded['error'] ?? ('HTTP ' . $status);
-            throw new HttpException(502, 'Serper 请求失败：' . Str::limit((string) $message, 300), 'serper_failed', ['status' => $status]);
+            throw new HttpException(502, 'Serper 请求失败：' . Str::limit($message, 300), 'serper_failed', ['status' => $status]);
         }
 
         $organic = $decoded['organic'] ?? [];

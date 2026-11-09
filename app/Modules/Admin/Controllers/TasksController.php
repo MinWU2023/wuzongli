@@ -38,13 +38,27 @@ final class TasksController extends AdminController
                 (SELECT COUNT(*) FROM `' . $prefix . 'keywords` k WHERE k.task_id = t.id) AS keywords_count,
                 (SELECT COUNT(*) FROM `' . $prefix . 'websites` w WHERE w.task_id = t.id) AS websites_count,
                 (SELECT COUNT(*) FROM `' . $prefix . 'websites` w WHERE w.task_id = t.id AND w.classify_status = \'approved\') AS approved_count,
-                (SELECT COUNT(*) FROM `' . $prefix . 'companies` c WHERE c.task_id = t.id) AS companies_count
+                (SELECT COUNT(*) FROM `' . $prefix . 'companies` c WHERE c.task_id = t.id) AS companies_count,
+                (
+                    (SELECT COUNT(*) FROM `' . $prefix . 'companies` c
+                     WHERE c.task_id = t.id AND c.raw_json IS NOT NULL
+                       AND TRIM(c.raw_json) NOT IN (\'\', \'null\', \'{}\'))
+                    +
+                    (SELECT COUNT(*) FROM `' . $prefix . 'websites` w
+                     WHERE w.task_id = t.id AND w.pages_json IS NOT NULL
+                       AND TRIM(w.pages_json) NOT IN (\'\', \'null\', \'[]\'))
+                ) AS crawl_cache_count
              FROM `' . $prefix . 'tasks` t' . $whereSql . '
              ORDER BY t.id DESC LIMIT ' . $perPage . ' OFFSET ' . $offset,
             $bindings
         );
         $taskService = new TaskService();
-        $rows = array_map(fn (array $row): array => $taskService->decorate($row), $rows);
+        $rows = array_map(static function (array $row) use ($taskService): array {
+            $row = $taskService->decorate($row);
+            $row['crawl_cache_count'] = (int) ($row['crawl_cache_count'] ?? 0);
+            $row['can_clear_crawl_cache'] = $taskService->isFullyCompleted($row);
+            return $row;
+        }, $rows);
 
         $this->renderAdmin('tasks/index', [
             'tasks' => $rows,
@@ -73,6 +87,7 @@ final class TasksController extends AdminController
         $companies = $db->table('companies')->where('task_id', $taskId)->orderBy('id')->limit(300)->get();
         $logs = $taskService->logs($taskId, 80);
         $progress = $taskService->progress($task, $counts);
+        $crawlCache = $taskService->crawlCacheStats($taskId);
 
         $this->renderAdmin('tasks/show', [
             'task' => $task,
@@ -82,6 +97,8 @@ final class TasksController extends AdminController
             'websites' => $websites,
             'companies' => $companies,
             'logs' => $logs,
+            'crawlCache' => $crawlCache,
+            'canClearCrawlCache' => $taskService->isFullyCompleted($task),
         ], $task['city'] . ' · 任务详情', 'tasks');
     }
 
@@ -104,6 +121,16 @@ final class TasksController extends AdminController
             } elseif ($action === 'retry') {
                 $pipeline->retry($taskId);
                 flash('success', '已重置异常项，插件下一轮轮询会重试。');
+            } elseif ($action === 'clear_crawl_cache') {
+                $cleared = $tasks->clearCrawlCache($taskId);
+                if ($cleared['total'] === 0) {
+                    flash('success', '该任务已无抓取缓存数据可清理。');
+                } else {
+                    flash(
+                        'success',
+                        '已清理抓取缓存：企业中间结果 ' . $cleared['companies'] . ' 条，网站页面列表 ' . $cleared['websites'] . ' 条。线索数据保留。'
+                    );
+                }
             } else {
                 flash('error', '未知操作。');
             }

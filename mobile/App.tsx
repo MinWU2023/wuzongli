@@ -110,8 +110,8 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      {/* InfinityFree aes.js：隐藏 WebView 过主机校验后再调 API */}
-      <HostApiWebView enabled />
+      {/* InfinityFree aes.js：离屏 WebView 过主机校验后再调 API */}
+      <HostApiWebView enabled apiBase={config?.apiBase || ''} />
       {booting ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg }}>
           <ActivityIndicator color={colors.accent} />

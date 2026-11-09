@@ -49,7 +49,7 @@ function parseApiPayload(text: string, status: number): any {
     if (isSecurityChallengeHtml(text)) {
       setForceHostBridge(true);
       throw new ApiError(
-        '主机开启了浏览器安全校验（InfinityFree）。请确认已部署服务端 /bridge，并使用最新 App；若仍失败需换无此校验的主机。',
+        '主机开启了浏览器安全校验(常见于InfinityFree)。请确认App已更新，或换可直连的主机。',
         'host_security',
         status
       );

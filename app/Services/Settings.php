@@ -104,7 +104,7 @@ final class Settings
             'request_delay_ms' => '2500',
             'ai_json_mode' => '1',
             'search_provider' => 'auto',
-            'serper_api_key' => 'a4be645a029169206f66e8024a73361f005fc5ef',
+            'serper_api_key' => '',
             'serper_base_url' => 'https://google.serper.dev/search',
             'serper_gl' => 'us',
             'serper_hl' => 'en',

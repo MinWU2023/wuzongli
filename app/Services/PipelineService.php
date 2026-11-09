@@ -512,7 +512,7 @@ final class PipelineService
         } catch (HttpException $e) {
             // Configuration and quota errors are not transient; pause instead
             // of silently skipping every remaining page.
-            if (in_array($e->errorCode, ['serper_not_configured', 'serper_unauthorized', 'serper_rate_limited'], true)) {
+            if (in_array($e->errorCode, ['serper_not_configured', 'serper_unauthorized', 'serper_rate_limited', 'serper_exhausted'], true)) {
                 $this->tasks->setError($taskId, $e->getMessage());
                 $this->tasks->log($taskId, 'serp', 'error', $e->getMessage(), [
                     'provider' => 'serper',

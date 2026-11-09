@@ -31,18 +31,29 @@ final class SerperAccountService
     public function current(): ?array
     {
         $db = Db::instance();
+        // Never keep serving an exhausted/disabled "current" row — that made new
+        // ready accounts look unused while Serper kept returning "Not enough credits".
         $row = $db->fetch(
             'SELECT * FROM `' . $db->tableName('serper_accounts') . '`
-             WHERE `is_current` = 1 AND `is_enabled` = 1 AND `status` <> \'disabled\'
+             WHERE `is_current` = 1 AND `is_enabled` = 1 AND `status` = \'ready\'
              ORDER BY `priority` ASC, `id` ASC LIMIT 1'
         );
         if ($row !== null) {
             return $this->decorate($row);
         }
-        // 没有标记 current 时，自动挑第一个可用账号
+        // Clear stale current flags on exhausted/error rows, then pick next ready.
+        try {
+            $db->query(
+                'UPDATE `' . $db->tableName('serper_accounts') . '`
+                 SET `is_current` = 0
+                 WHERE `is_current` = 1 AND (`is_enabled` = 0 OR `status` <> \'ready\')'
+            );
+        } catch (\Throwable) {
+            // ignore
+        }
         $row = $db->fetch(
             'SELECT * FROM `' . $db->tableName('serper_accounts') . '`
-             WHERE `is_enabled` = 1 AND `status` IN (\'ready\', \'error\')
+             WHERE `is_enabled` = 1 AND `status` = \'ready\'
              ORDER BY `priority` ASC, `id` ASC LIMIT 1'
         );
         if ($row === null) {

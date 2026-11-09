@@ -69,6 +69,12 @@ $router->post('/admin/tasks/{id}/dial', 'Admin/Tasks@enqueueDial');
 $router->get('/admin/tasks/{id}', 'Admin/Tasks@show');
 $router->post('/admin/tasks/{id}/action', 'Admin/Tasks@action');
 
+// AI 通过且有电话的企业列表 + 按日号码备注 / 导出
+$router->get('/admin/companies', 'Admin/Companies@index');
+$router->post('/admin/companies/notes', 'Admin/Companies@saveNote');
+$router->post('/admin/companies/dial', 'Admin/Companies@enqueueDial');
+$router->get('/admin/companies/export.csv', 'Admin/Companies@export');
+
 $router->get('/admin/relays', 'Admin/Relays@index');
 $router->get('/admin/relays/create', 'Admin/Relays@create');
 $router->post('/admin/relays', 'Admin/Relays@store');
