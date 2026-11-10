@@ -28,9 +28,14 @@ final class CompanyLeadService
             }
             foreach (preg_split('/[,;\/|]+/u', $raw) ?: [] as $piece) {
                 $phone = $this->normalizePhone($piece);
-                if ($phone !== '') {
-                    $found[$phone] = $phone;
+                if ($phone === '') {
+                    continue;
                 }
+                $fp = PhoneService::fingerprint($phone);
+                if ($fp === '' || isset($found[$fp])) {
+                    continue;
+                }
+                $found[$fp] = $phone;
             }
         }
 
@@ -46,9 +51,14 @@ final class CompanyLeadService
                     } else {
                         continue;
                     }
-                    if ($phone !== '') {
-                        $found[$phone] = $phone;
+                    if ($phone === '') {
+                        continue;
                     }
+                    $fp = PhoneService::fingerprint($phone);
+                    if ($fp === '' || isset($found[$fp])) {
+                        continue;
+                    }
+                    $found[$fp] = $phone;
                 }
             }
         }

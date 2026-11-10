@@ -178,7 +178,8 @@ final class WebsiteService
         if ($companyName === '') {
             $companyName = $this->fallbackCompanyName($titles, $allHtml);
         }
-        $phones = array_slice($this->dedupePhones($linkContacts['phones']), 0, 6);
+        // 同企业同号入库去重：+86 / 86 / 裸号视为同一号码。
+        $phones = array_slice(PhoneService::uniquePhones($linkContacts['phones']), 0, 6);
         $emails = $this->mergeList($this->asStringList($ai['emails'] ?? []), $regex['emails']);
         $emails = array_slice(array_values(array_unique(array_filter($emails, static fn (string $email): bool => (bool) filter_var($email, FILTER_VALIDATE_EMAIL)))), 0, 6);
 
@@ -206,6 +207,8 @@ final class WebsiteService
             'link_phones' => $linkContacts,
             'page_titles' => $titles,
         ];
+        $primaryPhone = $phones[0] ?? null;
+        $altPhones = array_slice($phones, 1);
         $row = [
             'task_id' => (int) $task['id'],
             'website_id' => (int) $website['id'],
@@ -213,8 +216,8 @@ final class WebsiteService
             'domain' => $domain,
             'country' => '中国',
             'city' => (string) $task['city'],
-            'phone' => $phones[0] ?? null,
-            'phone_alt' => $phones === [] ? null : implode(', ', array_slice($phones, 1)),
+            'phone' => $primaryPhone,
+            'phone_alt' => $altPhones === [] ? null : implode(', ', $altPhones),
             'email' => $emails[0] ?? null,
             'linkedin' => $social['linkedin'],
             'tiktok' => $social['tiktok'],
@@ -434,9 +437,9 @@ final class WebsiteService
         }
 
         return [
-            'phones' => $this->dedupePhones($phones),
+            'phones' => PhoneService::uniquePhones($phones),
             'whatsapp_links' => array_values(array_unique($whatsappLinks)),
-            'whatsapp_phones' => $this->dedupePhones($whatsappPhones),
+            'whatsapp_phones' => PhoneService::uniquePhones($whatsappPhones),
         ];
     }
 
@@ -631,16 +634,9 @@ final class WebsiteService
     /** @param array<int, string> $phones @return array<int, string> */
     private function dedupePhones(array $phones): array
     {
-        $output = [];
-        $seen = [];
-        foreach ($phones as $phone) {
-            $digits = preg_replace('/\D+/', '', $phone) ?? '';
-            if ($digits === '' || isset($seen[$digits])) {
-                continue;
-            }
-            $seen[$digits] = true;
-            $output[] = Str::limit($phone, 240, '');
-        }
-        return $output;
+        return array_map(
+            static fn (string $phone): string => Str::limit($phone, 240, ''),
+            PhoneService::uniquePhones($phones)
+        );
     }
 }

@@ -72,6 +72,65 @@ final class PhoneService
     }
 
     /**
+     * 同企业入库去重用指纹：忽略格式差异（+86 / 86 / 0 前缀、空格横杠）。
+     * 中国手机号统一落到 11 位；其它号码用纯数字（去掉前导 00）。
+     */
+    public static function fingerprint(string $phone): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+        if ($digits === '') {
+            return '';
+        }
+        if (str_starts_with($digits, '00')) {
+            $digits = substr($digits, 2);
+        }
+        // +86 / 86 + 手机
+        if (preg_match('/^86(1[3-9]\d{9})$/', $digits, $m)) {
+            return $m[1];
+        }
+        // 0 + 手机（偶发）
+        if (preg_match('/^0(1[3-9]\d{9})$/', $digits, $m)) {
+            return $m[1];
+        }
+        if (preg_match('/^1[3-9]\d{9}$/', $digits)) {
+            return $digits;
+        }
+        // +86 / 86 + 座机/400
+        if (preg_match('/^86([2-9]\d{8,11}|400\d{7}|800\d{7})$/', $digits, $m)) {
+            return $m[1];
+        }
+        if (preg_match('/^0(\d{9,11})$/', $digits, $m)) {
+            return $m[1];
+        }
+        return $digits;
+    }
+
+    /**
+     * 按指纹去重，保留首次出现的原始写法。
+     *
+     * @param array<int, string> $phones
+     * @return array<int, string>
+     */
+    public static function uniquePhones(array $phones): array
+    {
+        $output = [];
+        $seen = [];
+        foreach ($phones as $phone) {
+            $phone = trim((string) $phone);
+            if ($phone === '') {
+                continue;
+            }
+            $fp = self::fingerprint($phone);
+            if ($fp === '' || isset($seen[$fp])) {
+                continue;
+            }
+            $seen[$fp] = true;
+            $output[] = $phone;
+        }
+        return $output;
+    }
+
+    /**
      * 规则解析单个原始号码；无法确定国家/区号时返回 null（不猜测）。
      *
      * @return array{raw:string,dial:string,type:string,cc:string,display:string,ext:string,source:string}|null
@@ -175,15 +234,25 @@ final class PhoneService
                 continue;
             }
             $entry = self::sanitizeAi($n);
-            if ($entry !== null && !isset($out[$entry['dial']])) {
-                $out[$entry['dial']] = $entry;
+            if ($entry === null) {
+                continue;
             }
+            $fp = self::fingerprint((string) $entry['dial']);
+            if ($fp === '' || isset($out[$fp])) {
+                continue;
+            }
+            $out[$fp] = $entry;
         }
         foreach (self::split($source) as $part) {
             $entry = self::fromRaw($part);
-            if ($entry !== null && !isset($out[$entry['dial']])) {
-                $out[$entry['dial']] = $entry;
+            if ($entry === null) {
+                continue;
             }
+            $fp = self::fingerprint((string) $entry['dial']);
+            if ($fp === '' || isset($out[$fp])) {
+                continue;
+            }
+            $out[$fp] = $entry;
         }
         return array_values($out);
     }
@@ -203,9 +272,17 @@ final class PhoneService
             return ['primary' => null, 'alts' => []];
         }
         $primary = $usable[0];
+        $primaryFp = self::fingerprint((string) $primary['dial']);
         $alts = [];
+        $seen = [$primaryFp => true];
         foreach (array_slice($usable, 1) as $n) {
-            $alts[] = (string) $n['dial'];
+            $dial = (string) $n['dial'];
+            $fp = self::fingerprint($dial);
+            if ($fp === '' || isset($seen[$fp])) {
+                continue;
+            }
+            $seen[$fp] = true;
+            $alts[] = $dial;
         }
         return ['primary' => $primary, 'alts' => $alts];
     }

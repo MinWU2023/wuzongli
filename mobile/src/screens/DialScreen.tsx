@@ -89,12 +89,12 @@ export function DialScreen({ config, onAcceptChange }: Props) {
       setStatusText('接单已关闭');
       return;
     }
-    setStatusText('接单中 · 每 10 秒轮询');
+    setStatusText('接单中 · 每 3 秒轮询');
     claimAndDial();
     timerRef.current = setInterval(() => {
       if (!currentRef.current) claimAndDial();
       else refreshStats();
-    }, 10000);
+    }, 3000);
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
@@ -123,7 +123,7 @@ export function DialScreen({ config, onAcceptChange }: Props) {
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Title>好线索</Title>
-          <Subtitle>插件点击「拨号」后号码入库；开启接单后本机每 10 秒领取并唤起电话。</Subtitle>
+          <Subtitle>插件点击「拨号」后号码入库；开启接单后本机每 3 秒领取并唤起电话。</Subtitle>
         </View>
       </View>
 

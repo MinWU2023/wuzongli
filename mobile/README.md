@@ -4,7 +4,7 @@ Expo（React Native）App「好线索」：对接 `https://google.yzz.me`，领�
 
 ## 功能
 
-- **接单开关**：开启后每 **10 秒** 调用 `GET /api/dial/next` 领取待拨号码，自动 `tel:` 打开拨号盘
+- **接单开关**：开启后每 **3 秒** 调用 `GET /api/dial/next` 领取待拨号码，自动 `tel:` 打开拨号盘
 - **企业列表**：`GET /api/companies`，支持城市 / 公司名 / 手机号 / 关键词搜索
 - **设置**：API 地址（默认 `https://google.yzz.me`）与后台 API Key
 
