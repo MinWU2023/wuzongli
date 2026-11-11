@@ -198,6 +198,8 @@ final class SerperService
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
         ]);
+        // 默认直连，避免本机系统代理劫持；若 Serper 必须翻墙，在设置填 serper_http_proxy。
+        \App\Core\OutboundHttp::apply($ch, \App\Core\OutboundHttp::serperOptions());
         $raw = curl_exec($ch);
         $curlError = curl_error($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);

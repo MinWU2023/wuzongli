@@ -166,7 +166,7 @@ final class TaskController extends ApiController
         $serperCount = (int) (Db::instance()->value(
             'SELECT COUNT(*) FROM `' . Db::instance()->tableName('serper_accounts') . '` WHERE `is_enabled` = 1'
         ) ?? 0);
-        $relay = Db::instance()->table('ai_relays')->orderBy('priority')->orderBy('id')->first();
+        $relay = Db::instance()->table('ai_relays')->where('is_active', 1)->orderBy('priority')->orderBy('id')->first();
         $aiMasked = '';
         if ($relay !== null) {
             $aiPlain = \App\Core\Crypto::decrypt((string) ($relay['api_key'] ?? ''));
@@ -239,12 +239,24 @@ final class TaskController extends ApiController
                 throw HttpException::validation('AI 中转站地址格式不正确，必须以 http:// 或 https:// 开头');
             }
             $db = Db::instance();
-            $relay = $db->table('ai_relays')->orderBy('priority')->orderBy('id')->first();
+            $table = $db->tableName('ai_relays');
+            // Prefer updating the relay that already matches the new base URL;
+            // otherwise fall back to the current primary (lowest priority).
+            $relay = null;
+            if ($aiBaseUrl !== '') {
+                $relay = $db->fetch(
+                    "SELECT * FROM `{$table}` WHERE `base_url` = ? ORDER BY `is_active` DESC, `priority` ASC, `id` ASC LIMIT 1",
+                    [$aiBaseUrl]
+                );
+            }
+            if ($relay === null) {
+                $relay = $db->table('ai_relays')->orderBy('priority')->orderBy('id')->first();
+            }
             if ($relay === null) {
                 if ($aiBaseUrl === '' || $aiApiKey === '') {
                     throw HttpException::validation('首次添加 AI 中转站请同时填写中转站地址与 API Key');
                 }
-                $db->insert('ai_relays', [
+                $newId = (int) $db->insert('ai_relays', [
                     'name' => '插件配置 AI 中转站',
                     'base_url' => $aiBaseUrl,
                     'api_key' => \App\Core\Crypto::encrypt($aiApiKey),
@@ -252,14 +264,21 @@ final class TaskController extends ApiController
                     'temperature' => 0.20,
                     'max_tokens' => 4096,
                     'timeout' => 120,
-                    'priority' => 10,
+                    'priority' => 1,
                     'is_active' => 1,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
+                // 切换配置时停用其它中转，避免继续打到旧的测试 Claude。
+                $db->query(
+                    "UPDATE `{$table}` SET `is_active` = 0, `updated_at` = ? WHERE `id` <> ?",
+                    [now(), $newId]
+                );
             } else {
+                $relayId = (int) $relay['id'];
                 $relayUpdate = [
                     'is_active' => 1,
+                    'priority' => 1,
                     'last_error' => null,
                     'updated_at' => now(),
                 ];
@@ -272,12 +291,16 @@ final class TaskController extends ApiController
                 if ($aiModel !== '') {
                     $relayUpdate['model'] = $aiModel;
                 }
-                $db->update('ai_relays', $relayUpdate, ['id' => (int) $relay['id']]);
+                $db->update('ai_relays', $relayUpdate, ['id' => $relayId]);
+                $db->query(
+                    "UPDATE `{$table}` SET `is_active` = 0, `updated_at` = ? WHERE `id` <> ?",
+                    [now(), $relayId]
+                );
             }
         }
 
         $effectiveKey = $serperKey !== '' ? $serperKey : \App\Services\SerperService::apiKey();
-        $latestRelay = Db::instance()->table('ai_relays')->orderBy('priority')->orderBy('id')->first();
+        $latestRelay = Db::instance()->table('ai_relays')->where('is_active', 1)->orderBy('priority')->orderBy('id')->first();
         $aiMasked = '';
         if ($latestRelay !== null) {
             $aiPlain = \App\Core\Crypto::decrypt((string) ($latestRelay['api_key'] ?? ''));

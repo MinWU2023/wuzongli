@@ -103,12 +103,17 @@ final class Settings
             'google_domain' => 'www.google.com',
             'request_delay_ms' => '2500',
             'ai_json_mode' => '1',
+            // AI 出站默认直连，避免本机 V2ray/系统代理劫持；仅当填写 ai_http_proxy 时走代理。
+            'ai_force_direct' => '1',
+            'ai_http_proxy' => '',
             'search_provider' => 'auto',
             'serper_api_key' => '',
             'serper_base_url' => 'https://google.serper.dev/search',
             'serper_gl' => 'us',
             'serper_hl' => 'en',
             'serper_timeout' => '30',
+            // 空=直连；国内主机访问 serper.dev 失败时可填 socks5://127.0.0.1:10808
+            'serper_http_proxy' => '',
             // App 控制：插件是否自动排队跑任务（1=开启排队，0=即时停止）
             'extension_runner_enabled' => '1',
         ];

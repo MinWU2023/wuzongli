@@ -28,7 +28,7 @@ final class TaskService
         if ($keywordCount <= 0) {
             $keywordCount = (int) setting('keyword_count', 24);
         }
-        $keywordCount = max(6, min(60, $keywordCount));
+        $keywordCount = max(6, min(120, $keywordCount));
         // 0 = 自动翻页：每个关键词一直翻到 Google 没有更多结果为止（受安全上限约束）。
         $pagesTarget = isset($input['pages_target']) && $input['pages_target'] !== null
             ? (int) $input['pages_target']
@@ -82,7 +82,7 @@ final class TaskService
         $options = is_array($task['options'] ?? null) ? $task['options'] : [];
         $keywordCount = (int) ($input['keyword_count'] ?? $options['keyword_count'] ?? $task['keyword_count'] ?? 24);
         $pagesTarget = (int) ($input['pages_target'] ?? $options['pages_target'] ?? $task['pages_target'] ?? 3);
-        $keywordCount = max(6, min(60, $keywordCount));
+        $keywordCount = max(6, min(120, $keywordCount));
         $pagesTarget = $pagesTarget <= 0 ? 0 : min(PipelineService::AUTO_PAGE_CAP, $pagesTarget);
         $options['keyword_count'] = $keywordCount;
         $options['pages_target'] = $pagesTarget;

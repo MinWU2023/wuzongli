@@ -53,7 +53,7 @@
         <form method="post" action="<?= e(url('/admin/settings')) ?>" class="settings-form">
             <?= csrf_field() ?>
             <div class="form-grid">
-                <label class="field span-2"><span>每个任务关键词数</span><input type="number" name="keyword_count" value="<?= (int) $settings['keyword_count'] ?>" min="6" max="60"><small>6–60，AI 实际产出会受模型影响</small></label>
+                <label class="field span-2"><span>每个任务关键词数</span><input type="number" name="keyword_count" value="<?= (int) $settings['keyword_count'] ?>" min="6" max="120"><small>6–120，AI 实际产出会受模型影响</small></label>
                 <label class="field span-2"><span>每个关键词搜索页数</span><input type="number" name="serp_pages" value="<?= (int) $settings['serp_pages'] ?>" min="0" max="30"><small>0 = 自动翻页（搜到没有结果为止，最多 30 页）；也可填 1–30 固定页数</small></label>
                 <label class="field span-2"><span>域名筛选批量</span><input type="number" name="classify_batch" value="<?= (int) $settings['classify_batch'] ?>" min="5" max="50"><small>每批提交给 AI 的域名数量</small></label>
                 <label class="field span-2"><span>失败重试次数</span><input type="number" name="max_attempts" value="<?= (int) $settings['max_attempts'] ?>" min="1" max="10"><small>超过后跳过并记录异常</small></label>
@@ -99,6 +99,21 @@
                 <span class="switch"></span>
                 <span><b>启用 JSON Mode</b><small>中转站不支持 response_format 时会自动回退</small></span>
             </label>
+            <label class="switch-field">
+                <input type="checkbox" name="ai_force_direct" value="1" <?= !isset($settings['ai_force_direct']) || (int) $settings['ai_force_direct'] ? 'checked' : '' ?>>
+                <span class="switch"></span>
+                <span><b>AI 出站直连</b><small>推荐开启。忽略本机 V2ray/系统代理，避免 AI 超时；谷歌仍由浏览器翻墙</small></span>
+            </label>
+            <div class="form-grid">
+                <label class="field span-2"><span>AI 专用代理（可选）</span>
+                    <input name="ai_http_proxy" value="<?= e((string) ($settings['ai_http_proxy'] ?? '')) ?>" placeholder="留空=直连，例如 socks5://127.0.0.1:10808">
+                    <small>仅当中转站必须翻墙时填写；填写后优先走该代理</small>
+                </label>
+                <label class="field span-2"><span>Serper 专用代理（可选）</span>
+                    <input name="serper_http_proxy" value="<?= e((string) ($settings['serper_http_proxy'] ?? '')) ?>" placeholder="留空=直连，例如 socks5://127.0.0.1:10808">
+                    <small>国内主机访问 serper.dev 失败时再填</small>
+                </label>
+            </div>
             <div class="form-actions">
                 <button class="btn primary" type="submit">保存设置</button>
             </div>

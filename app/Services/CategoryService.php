@@ -14,7 +14,7 @@ use App\Core\Str;
 final class CategoryService
 {
     /** 单个任务最多可选的细分类数量，避免关键词被稀释。 */
-    public const MAX_SELECTED = 12;
+    public const MAX_SELECTED = 16;
 
     /** @var array<int, array<string, mixed>>|null */
     private static ?array $tree = null;

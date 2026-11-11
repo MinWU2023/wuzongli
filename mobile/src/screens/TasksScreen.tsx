@@ -49,7 +49,7 @@ const STATUS_LABEL: Record<string, string> = {
 // 关键词数 6–60；页数 0 表示自动翻页（服务端上限 30 页）
 function parseKeywords(value: string): number {
   const n = Math.floor(Number(value));
-  return Number.isFinite(n) && n > 0 ? Math.min(60, Math.max(6, n)) : 24;
+  return Number.isFinite(n) && n > 0 ? Math.min(120, Math.max(6, n)) : 48;
 }
 
 function parsePages(value: string): number {

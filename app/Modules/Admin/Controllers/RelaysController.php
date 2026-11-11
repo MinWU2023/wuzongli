@@ -49,7 +49,11 @@ final class RelaysController extends AdminController
         $data['api_key'] = Crypto::encrypt($key);
         $data['created_at'] = now();
         $data['updated_at'] = now();
-        Db::instance()->insert('ai_relays', $data);
+        $db = Db::instance();
+        $id = (int) $db->insert('ai_relays', $data);
+        if (!empty($data['is_active']) && $this->request->boolean('exclusive')) {
+            $this->deactivateOthers($id);
+        }
         flash('success', 'AI 中转站已添加。');
         $this->go('/admin/relays');
     }
@@ -78,8 +82,20 @@ final class RelaysController extends AdminController
         }
         $data['updated_at'] = now();
         Db::instance()->update('ai_relays', $data, ['id' => $relayId]);
+        if (!empty($data['is_active']) && $this->request->boolean('exclusive')) {
+            $this->deactivateOthers($relayId);
+        }
         flash('success', 'AI 中转站已更新。');
         $this->go('/admin/relays');
+    }
+
+    private function deactivateOthers(int $keepId): void
+    {
+        $db = Db::instance();
+        $db->query(
+            'UPDATE `' . $db->tableName('ai_relays') . '` SET `is_active` = 0, `updated_at` = ? WHERE `id` <> ?',
+            [now(), $keepId]
+        );
     }
 
     public function delete(string $id): never
@@ -125,3 +141,4 @@ final class RelaysController extends AdminController
         ];
     }
 }
+

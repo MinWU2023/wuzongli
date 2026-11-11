@@ -33,7 +33,7 @@ final class SettingsController extends AdminController
     public function update(): never
     {
         $this->guardCsrf();
-        $keywordCount = max(6, min(60, $this->request->int('keyword_count', 24)));
+        $keywordCount = max(6, min(120, $this->request->int('keyword_count', 24)));
         $serpPages = max(0, min(\App\Services\PipelineService::AUTO_PAGE_CAP, $this->request->int('serp_pages', 0)));
         $batch = max(5, min(50, $this->request->int('classify_batch', 30)));
         $attempts = max(1, min(10, $this->request->int('max_attempts', 3)));
@@ -74,6 +74,17 @@ final class SettingsController extends AdminController
         }
         $serperTimeout = max(5, min(60, $this->request->int('serper_timeout', 30)));
 
+        $aiProxy = trim($this->request->string('ai_http_proxy'));
+        $serperProxy = trim($this->request->string('serper_http_proxy'));
+        if ($aiProxy !== '' && !preg_match('#^(https?|socks5h?)://#i', $aiProxy)) {
+            flash('error', 'AI 代理地址须以 http://、https://、socks5:// 或 socks5h:// 开头。');
+            $this->back();
+        }
+        if ($serperProxy !== '' && !preg_match('#^(https?|socks5h?)://#i', $serperProxy)) {
+            flash('error', 'Serper 代理地址须以 http://、https://、socks5:// 或 socks5h:// 开头。');
+            $this->back();
+        }
+
         Settings::setMany([
             'keyword_count' => $keywordCount,
             'serp_pages' => $serpPages,
@@ -82,11 +93,14 @@ final class SettingsController extends AdminController
             'request_delay_ms' => $delay,
             'google_domain' => $googleDomain,
             'ai_json_mode' => $this->request->boolean('ai_json_mode') ? 1 : 0,
+            'ai_force_direct' => $this->request->boolean('ai_force_direct') ? 1 : 0,
+            'ai_http_proxy' => $aiProxy,
             'search_provider' => $provider,
             'serper_base_url' => $serperBase,
             'serper_gl' => $serperGl,
             'serper_hl' => $serperHl,
             'serper_timeout' => $serperTimeout,
+            'serper_http_proxy' => $serperProxy,
         ]);
         flash('success', '系统设置已保存。');
         $this->go('/admin/settings');

@@ -241,7 +241,7 @@ final class PipelineService
             }
 
             $count = (int) ($task['options']['keyword_count'] ?? setting('keyword_count', 24));
-            $count = max(6, min(60, $count));
+            $count = max(6, min(120, $count));
             try {
                 $keywords = $this->ai->generateKeywords($task, $count);
             } catch (HttpException $e) {
@@ -1278,7 +1278,7 @@ final class PipelineService
             $targetMarket = (string) ($task['target_market'] ?: '全球');
         }
         $keywordCount = isset($options['keyword_count']) && (int) $options['keyword_count'] > 0
-            ? max(6, min(60, (int) $options['keyword_count']))
+            ? max(6, min(120, (int) $options['keyword_count']))
             : (int) ($task['keyword_count'] ?: 24);
         $pagesTarget = isset($options['pages_target'])
             ? max(0, min(self::AUTO_PAGE_CAP, (int) $options['pages_target']))

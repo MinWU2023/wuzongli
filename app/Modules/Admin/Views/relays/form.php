@@ -39,6 +39,11 @@ $action = $isEdit ? url('/admin/relays/' . (int) $relay['id']) : url('/admin/rel
         <span class="switch"></span>
         <span><b>启用该中转站</b><small>关闭后不再参与调用</small></span>
     </label>
+    <label class="switch-field">
+        <input type="checkbox" name="exclusive" value="1" checked>
+        <span class="switch"></span>
+        <span><b>设为唯一启用</b><small>保存后自动停用其它中转站，避免继续调用旧的测试 Claude</small></span>
+    </label>
     <div class="form-actions">
         <a class="btn ghost" href="<?= e(url('/admin/relays')) ?>">取消</a>
         <button class="btn primary" type="submit"><?= $isEdit ? '保存修改' : '添加中转站' ?></button>

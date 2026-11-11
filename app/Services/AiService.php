@@ -7,6 +7,7 @@ use App\Core\Crypto;
 use App\Core\Db;
 use App\Core\HttpException;
 use App\Core\Logger;
+use App\Core\OutboundHttp;
 use App\Core\Str;
 
 /**
@@ -232,6 +233,8 @@ final class AiService
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_USERAGENT => 'GoogleLeadEngine/' . APP_VERSION,
         ]);
+        // AI 中转默认直连：不走本机 V2ray/系统代理（谷歌浏览仍由浏览器翻墙）。
+        OutboundHttp::apply($ch, OutboundHttp::aiOptions());
         $raw = curl_exec($ch);
         $errno = curl_errno($ch);
         $error = curl_error($ch);
@@ -239,7 +242,11 @@ final class AiService
         curl_close($ch);
 
         if ($raw === false || $errno !== 0) {
-            throw new \RuntimeException('网络错误：' . ($error !== '' ? $error : 'cURL ' . $errno));
+            $hint = '';
+            if ($errno === CURLE_OPERATION_TIMEDOUT || str_contains($error, 'timed out') || str_contains($error, 'Timeout')) {
+                $hint = '。若本机开了 V2ray，服务端已强制 AI 直连；请确认 AI 中转地址无需翻墙且可从主机访问。TUN 全局模式请在 V2ray 规则里把中转域名设为直连';
+            }
+            throw new \RuntimeException('网络错误：' . ($error !== '' ? $error : 'cURL ' . $errno) . $hint);
         }
         $decoded = json_decode($raw, true);
         if (!is_array($decoded)) {

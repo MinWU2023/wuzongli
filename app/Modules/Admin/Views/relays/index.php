@@ -20,13 +20,28 @@
         </div>
     </section>
 <?php else: ?>
+    <?php
+    $primaryId = null;
+    foreach ($relays as $r) {
+        if ((int) ($r['is_active'] ?? 0) === 1) {
+            $primaryId = (int) $r['id'];
+            break;
+        }
+    }
+    ?>
     <div class="relay-grid">
         <?php foreach ($relays as $relay): ?>
             <section class="relay-card <?= (int) $relay['is_active'] ? '' : 'inactive' ?>">
                 <div class="relay-card-head">
                     <div class="relay-icon">AI</div>
                     <div class="relay-title">
-                        <div><h3><?= e($relay['name']) ?></h3><span class="badge <?= (int) $relay['is_active'] ? 'soft-approved' : 'neutral' ?>"><?= (int) $relay['is_active'] ? '启用中' : '已停用' ?></span></div>
+                        <div>
+                            <h3><?= e($relay['name']) ?></h3>
+                            <span class="badge <?= (int) $relay['is_active'] ? 'soft-approved' : 'neutral' ?>"><?= (int) $relay['is_active'] ? '启用中' : '已停用' ?></span>
+                            <?php if ($primaryId !== null && (int) $relay['id'] === $primaryId): ?>
+                                <span class="badge soft-approved">当前优先</span>
+                            <?php endif; ?>
+                        </div>
                         <p><?= e($relay['base_url']) ?></p>
                     </div>
                     <span class="priority-pill">P<?= (int) $relay['priority'] ?></span>
@@ -54,6 +69,6 @@
         <?php endforeach; ?>
     </div>
     <div class="notice info">
-        调用会按 <code>priority</code> 从小到大尝试，失败时自动切换下一个。建议至少配置两个不同供应商的中转站。
+        调用会按 <code>priority</code> 从小到大尝试，失败时自动切换下一个。若仍在请求旧的测试 Claude，请把它<strong>停用或删除</strong>，并确保自购中转站显示「当前优先」。
     </div>
 <?php endif; ?>

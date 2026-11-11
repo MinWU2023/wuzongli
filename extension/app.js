@@ -88,7 +88,7 @@
         initialized: false,
         /** 产品分类库（/api/categories）与选择状态 */
         categoryTree: null,
-        categoryMax: 12,
+        categoryMax: 16,
         newCategories: [],
         editCategories: [],
         categoryTarget: 'new',
@@ -1875,7 +1875,7 @@
         if (state.categoryTree) return state.categoryTree;
         const data = await request('/api/categories', { timeout: 20000 });
         state.categoryTree = Array.isArray(data.groups) ? data.groups : [];
-        state.categoryMax = Number(data.max_selected || 12);
+        state.categoryMax = Number(data.max_selected || 16);
         return state.categoryTree;
     }
 
@@ -2043,7 +2043,7 @@
             $('#cityInput').focus();
             return;
         }
-        const keywordCount = Math.max(6, Math.min(60, Number($('#keywordCountInput').value || 24)));
+        const keywordCount = Math.max(6, Math.min(120, Number($('#keywordCountInput').value || 48)));
         const pagesRaw = String($('#pagesTargetInput').value || '').trim();
         const pagesTarget = pagesRaw === '' ? 0 : Math.max(0, Math.min(30, Number(pagesRaw) || 0));
         button.disabled = true;
@@ -2204,7 +2204,7 @@
         const stage = $('#rewindStageSelect') ? $('#rewindStageSelect').value : 'keywords';
         const city = $('#editCityInput') ? $('#editCityInput').value.trim() : task.city;
         const targetMarket = $('#editMarketInput') ? $('#editMarketInput').value : (task.target_market || '全球');
-        const keywordCount = Math.max(6, Math.min(60, Number($('#editKeywordCountInput')?.value || task.keyword_count || 24)));
+        const keywordCount = Math.max(6, Math.min(120, Number($('#editKeywordCountInput')?.value || task.keyword_count || 48)));
         const editPagesRaw = String($('#editPagesTargetInput')?.value ?? '').trim();
         const pagesTarget = editPagesRaw === '' ? 0 : Math.max(0, Math.min(30, Number(editPagesRaw) || 0));
         if (!city) {
@@ -2371,9 +2371,9 @@
         $$('.preset-buttons button').forEach((button) => {
             button.addEventListener('click', () => {
                 const presets = {
-                    quick: { keywords: 12, pages: 2 },
-                    standard: { keywords: 24, pages: 0 },
-                    deep: { keywords: 40, pages: 0 }
+                    quick: { keywords: 48, pages: 2 },
+                    standard: { keywords: 64, pages: 0 },
+                    deep: { keywords: 96, pages: 0 }
                 };
                 const preset = presets[button.getAttribute('data-preset')] || presets.standard;
                 $('#keywordCountInput').value = String(preset.keywords);

@@ -5,7 +5,7 @@ define('BASE_PATH', dirname(__DIR__));
 define('APP_PATH', BASE_PATH . '/app');
 define('STORAGE_PATH', BASE_PATH . '/storage');
 define('CONFIG_PATH', BASE_PATH . '/config');
-define('APP_VERSION', '1.0.5');
+define('APP_VERSION', '1.0.7');
 
 $scriptName = str_replace('\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? '/index.php'));
 // Some SAPI implementations (notably PHP's built-in server with a router)
